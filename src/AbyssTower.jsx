@@ -92,6 +92,34 @@ const MODIFIERS = [
   { key: "none", name: "平穏", icon: "🕊️", desc: "特別な影響はない" },
 ];
 let ACTIVE_MOD = MODIFIERS[MODIFIERS.length - 1];
+
+// ===== 深淵の彼方(プレステージモード):初回クリア後に解禁。好きな数だけ組み合わせて自ら難易度を積む =====
+// 有効にした特性の数だけ、魂の報酬とレア度に補正がかかる(積んだ分だけ報われる)
+const ASCENSIONS = [
+  { key: "asc_hp", icon: "💢", name: "猛る敵意", desc: "敵の最大HP+15%", enemyHp: 1.15 },
+  { key: "asc_atk", icon: "🗡️", name: "研ぎ澄まされた牙", desc: "敵の攻撃力+15%", enemyAtk: 1.15 },
+  { key: "asc_elite", icon: "💀", name: "精鋭の跳梁", desc: "通常戦闘が25%でエリートにすり替わる", eliteCh: 0.25 },
+  { key: "asc_rest", icon: "🩹", name: "涸れた泉", desc: "焚き火の回復量が半分になる", restMult: 0.5 },
+  { key: "asc_price", icon: "💰", name: "吊り上がった値段", desc: "商人の価格+40%", shopMult: 1.4 },
+  { key: "asc_drop", icon: "🌑", name: "薄い恵み", desc: "装備ドロップ率-20%", dropPenalty: 0.2 },
+];
+const ASCENSION_MAP = Object.fromEntries(ASCENSIONS.map(a => [a.key, a]));
+let ACTIVE_ASCENSION_FX = {};
+const ascFx = (key, def = 1) => ACTIVE_ASCENSION_FX[key] ?? def;
+function computeAscensionFx(keys) {
+  const fx = { count: keys.length, enemyHp: 1, enemyAtk: 1, eliteCh: 0, restMult: 1, shopMult: 1, dropPenalty: 0 };
+  for (const k of keys) {
+    const a = ASCENSION_MAP[k];
+    if (!a) continue;
+    if (a.enemyHp) fx.enemyHp *= a.enemyHp;
+    if (a.enemyAtk) fx.enemyAtk *= a.enemyAtk;
+    if (a.eliteCh) fx.eliteCh += a.eliteCh;
+    if (a.restMult) fx.restMult *= a.restMult;
+    if (a.shopMult) fx.shopMult *= a.shopMult;
+    if (a.dropPenalty) fx.dropPenalty += a.dropPenalty;
+  }
+  return fx;
+}
 const getMod = (key) => MODIFIERS.find(m => m.key === key) || MODIFIERS[MODIFIERS.length - 1];
 
 // ===== ゾーン(5階ごとの区画。ボス撃破後に次の環境を2択から選ぶ) =====
@@ -402,6 +430,14 @@ const BOSS_POOLS = [
     { name: "千眼の怪", icon: "👁️", pattern: ["attack", "heavy", "venom", "attack", "heavy"], gimmick: "arcane" },
   ],
 ];
+// 図鑑用:ボスプール全種+最終ボス+エンドレスボスをまとめた一覧(重複なし)
+const ALL_BOSSES = [
+  ...BOSS_POOLS.flat(),
+  { name: "深淵の魔王", icon: "😈" },
+  { name: "虚無の使徒", icon: "🌑" },
+  { name: "終焉竜", icon: "🐲" },
+  { name: "深淵の王", icon: "👁️" },
+];
 
 const PERKS = [
   { key: "atk", name: "腕力強化", desc: "攻撃力 +9", apply: p => ({ ...p, atk: p.atk + 9 }) },
@@ -670,10 +706,11 @@ function genEnemy(floor, elite = false, traitKey = null) {
   const e = {
     ...base,
     name: elite ? `エリート・${base.name}` : base.name,
+    codexId: base.name, // 図鑑用の不変キー(エリート化・分裂・不死化しても元の種族名を保つ)
     isBoss, isElite: elite, isFinal, trait,
-    maxHp: Math.round((22 + rand(0, 10)) * scale * hpMult * (isBoss ? 1 : 1.3) * (ACTIVE_MOD.enemyHp || 1) * (ACTIVE_ZONE.enemyHp || 1)), // 雑魚HP+30%(Ver.34:戦闘を長期戦寄りに)
+    maxHp: Math.round((22 + rand(0, 10)) * scale * hpMult * (isBoss ? 1 : 1.3) * (ACTIVE_MOD.enemyHp || 1) * (ACTIVE_ZONE.enemyHp || 1) * ascFx("enemyHp")), // 雑魚HP+30%(Ver.34:戦闘を長期戦寄りに)
     hp: 0, // 後で設定
-    atk: Math.round((5 + rand(0, 3)) * scale * atkMult * (ACTIVE_MOD.enemyAtk || 1) * (ACTIVE_ZONE.enemyAtk || 1)),
+    atk: Math.round((5 + rand(0, 3)) * scale * atkMult * (ACTIVE_MOD.enemyAtk || 1) * (ACTIVE_ZONE.enemyAtk || 1) * ascFx("enemyAtk")),
     xp: Math.round((14 + floor * 12) * xpMult * rewardScale), // 成長を速める(旧: 12+floor*10)
     goldScale: rewardScale,
     atkBuff: 1, // 咆哮による攻撃力上昇の累積
@@ -875,13 +912,33 @@ export default function HackRoguelike() {
   const [currentEvent, setCurrentEvent] = useState(null);
   const [showStatus, setShowStatus] = useState(false);
   const [best, setBest] = useState(0);
+  const [pendingAscension, setPendingAscension] = useState([]);
   // メタ進行:魂と恒久アンロック(window.storageに永続保存)
-  const [meta, setMeta] = useState({ souls: 0, buys: {}, best: 0 });
+  const [meta, setMeta] = useState({ souls: 0, buys: {}, best: 0, codex: { enemies: [], relics: [], abilities: [] } });
   const [soulsGained, setSoulsGained] = useState(0);
   const [victoryAwarded, setVictoryAwarded] = useState(false);
   const [muted, setMuted] = useState(false);
-  useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); } }); }, []);
+  useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); } }); }, []);
   useEffect(() => { SFX_MUTED = muted; }, [muted]);
+  // 図鑑(コレクション):敵・レリック・固有能力を発見済みとして永続記録する
+  const recordCodex = useCallback((category, keys) => {
+    const list = (Array.isArray(keys) ? keys : [keys]).filter(Boolean);
+    if (!list.length) return;
+    setMeta(m => {
+      const known = new Set(m.codex?.[category] || []);
+      const fresh = list.filter(k => !known.has(k));
+      if (!fresh.length) return m;
+      const nm = { ...m, codex: { ...m.codex, [category]: [...known, ...fresh] } };
+      metaStorageSave(nm);
+      return nm;
+    });
+  }, []);
+  useEffect(() => { if (enemy?.codexId) recordCodex("enemies", enemy.codexId); }, [enemy?.codexId, recordCodex]);
+  useEffect(() => { recordCodex("relics", player.relics || []); }, [player.relics, recordCodex]);
+  useEffect(() => {
+    const items = [...SLOT_KEYS.map(sk => equip[sk]), drop, shopItem].filter(Boolean);
+    recordCodex("abilities", items.filter(it => it.ability).map(it => it.ability));
+  }, [equip, drop, shopItem, recordCodex]);
   const toggleMute = () => {
     setMuted(mu => {
       const next = !mu;
@@ -895,6 +952,8 @@ export default function HackRoguelike() {
     let gained;
     if (victoryAwarded) gained = Math.max(0, (floorReached - FINAL_FLOOR) * 4);
     else gained = Math.round(floorReached * 4 + killCount * 2) + (cleared ? 100 : 0);
+    const ascCount = (player.ascension || []).length;
+    if (ascCount > 0) gained = Math.round(gained * (1 + ascCount * 0.15)); // 深淵の彼方:積んだ特性数だけ魂の報酬UP
     if (cleared) setVictoryAwarded(true);
     setSoulsGained(gained);
     setMeta(m => {
@@ -916,9 +975,10 @@ export default function HackRoguelike() {
 
   const addLog = useCallback((msg, c = "info") => setLog(l => [...l.slice(-7), { t: msg, c }]), []);
 
-  const startRun = (clsKey = "warrior", diffKey = "normal", blessingKey = null, modKey = "none", variantKey = "a", originKey = null) => {
+  const startRun = (clsKey = "warrior", diffKey = "normal", blessingKey = null, modKey = "none", variantKey = "a", originKey = null, ascensionKeys = []) => {
     ACTIVE_DIFF = DIFFICULTIES[diffKey];
     ACTIVE_MOD = getMod(modKey);
+    ACTIVE_ASCENSION_FX = computeAscensionFx(ascensionKeys);
     ACTIVE_ZONE = ZONES.entrance;
     setZoneKey("entrance");
     ACTIVE_BESTIARY = [...ENEMIES].sort(() => Math.random() - 0.5).slice(0, 11); // 今回の塔に出る11種を抽選(全24種)
@@ -935,6 +995,7 @@ export default function HackRoguelike() {
     p.knownSkills = [cls.skill];
     p.skillMods = {};
     p.hooks = {};
+    p.ascension = ascensionKeys;
     if (diffKey === "hell") p.hooks.cheatDeath = 1; // 地獄の加護:開始時から致死を1回だけ耐える
     if (clsKey === "vampire" && variantKey === "a") p.lifesteal += 4; // 渇血
     const bless = BLESSINGS.find(b => b.key === blessingKey);
@@ -967,7 +1028,8 @@ export default function HackRoguelike() {
     setEnemy(e);
     setScene("combat");
     const mod = getMod(modKey);
-    setLog([{ t: `【${cls.name}・${DIFFICULTIES[diffKey].name}】${mod.key !== "none" ? `世界:${mod.icon}${mod.name} ` : ""}${bless ? `祝福:${bless.icon}${bless.name} ` : ""}— 1F:${e.name}が現れた！`, c: "info" }]);
+    const ascTag = ascensionKeys.length ? `🌑深淵の彼方×${ascensionKeys.length} ` : "";
+    setLog([{ t: `【${cls.name}・${DIFFICULTIES[diffKey].name}】${ascTag}${mod.key !== "none" ? `世界:${mod.icon}${mod.name} ` : ""}${bless ? `祝福:${bless.icon}${bless.name} ` : ""}— 1F:${e.name}が現れた！`, c: "info" }]);
   };
 
   const stats = totalStats(player, equip);
@@ -1285,7 +1347,7 @@ export default function HackRoguelike() {
       return;
     }
     setPlayer(np);
-    const dropChance = e.isBoss || e.isElite || e.gimmick === "mimic" || e.arenaStage === 2 ? 1 : 0.55 + (ACTIVE_MOD.dropBonus || 0);
+    const dropChance = e.isBoss || e.isElite || e.gimmick === "mimic" || e.arenaStage === 2 ? 1 : Math.max(0.1, 0.55 + (ACTIVE_MOD.dropBonus || 0) - ascFx("dropPenalty", 0));
     if (Math.random() < dropChance) {
       const guaranteed = e.isBoss || e.isElite || e.gimmick === "mimic" || e.arenaStage === 2;
       const d = genItem(floor, guaranteed ? 1 : 0, null, null, { unidentified: !guaranteed && Math.random() < 0.18 });
@@ -1463,6 +1525,7 @@ export default function HackRoguelike() {
     { key: "forge", icon: "🔨", name: "鍛冶屋", desc: "ゴールドで装備を強化・改造できる" },
     { key: "event", icon: "❓", name: "？？？", desc: "何が起こるかわからない" },
     { key: "arena", icon: "🏟️", name: "闘技場", desc: "連戦(2体・休憩なし)。ゲージは持ち越し、まとめて報酬+装備確定" },
+    { key: "doppel", icon: "🪞", name: "鏡の間", desc: "今の自分自身を写した鏡像と一度だけ戦う。手強いがレア以上の装備確定＋レリックのチャンス" },
   ];
 
   // 闘技場専用の敵生成:連鎖ギミック(分裂・不死)は連戦と噛み合わないため外す
@@ -1500,6 +1563,7 @@ export default function HackRoguelike() {
     }
     // 分岐路:戦闘は必ず含め、残り2枠はランダム
     let roomPool = [...ROOMS.slice(1)];
+    if (nf < 3) roomPool = roomPool.filter(r => r.key !== "doppel"); // 鏡の間は序盤(1〜2F)には出さない
     if (ACTIVE_ZONE.shopBias) roomPool.push(ROOMS.find(r => r.key === "shop")); // 黄金の回廊:商人が出やすい
     if (ACTIVE_MOD.banShops) roomPool = roomPool.filter(r => r.key !== "shop" && r.key !== "forge"); // 商人なき世界
     const extras = [];
@@ -1537,7 +1601,7 @@ export default function HackRoguelike() {
 
   const chooseRoom = (room) => {
     if (room.key === "rest") {
-      const heal = Math.round(stats.maxHp * 0.35);
+      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult"));
       setPlayer(p => ({ ...p, hp: Math.min(stats.maxHp, p.hp + heal) }));
       addLog(`${floor}F:焚き火で休んだ (+${heal} HP)`, "heal");
       nextFloor();
@@ -1578,10 +1642,34 @@ export default function HackRoguelike() {
       addLog(`${floor}F:🏟️ 闘技場 — 1戦目、${e.name}が現れた！(連戦・休憩なし)`);
       return;
     }
+    if (room.key === "doppel") {
+      // 鏡の間:今の自分自身のステータスを写した鏡像と一度だけ戦う(エリート相当の報酬:装備確定+レリック抽選)
+      const e = {
+        name: `鏡像の${CLASSES[player.cls]?.name || "旅人"}`, icon: "🪞",
+        isElite: true, gimmick: null,
+        maxHp: Math.max(20, Math.round(stats.maxHp * 0.85)),
+        atk: Math.max(3, Math.round(stats.atk * 1.1)),
+        xp: Math.round((14 + floor * 12) * 1.8),
+        goldScale: 2.2,
+        atkBuff: 1,
+        pattern: ["attack", "attack", "heavy", "guard"],
+        patternIdx: 0,
+      };
+      e.hp = e.maxHp;
+      e.codexId = e.name;
+      e.intent = rollIntent(e);
+      if (stats.startStun > 0) { applyStatus(e, "stun", 1); addLog(`⏱️ 時が砕け、${e.name}は動けない！`, "info"); }
+      setEnemy(e);
+      regenOnCombatStart();
+      setScene("combat");
+      addLog(`${floor}F:🪞 鏡の間 — ${e.name}が立ちはだかる！(一度だけの戦い)`, "hurt");
+      return;
+    }
     let elite = room.key === "elite";
     let surprise = false;
     // 精鋭の世界:通常戦闘が30%でエリートにすり替わる
-    if (!elite && room.key === "battle" && ACTIVE_MOD.eliteCh && Math.random() < ACTIVE_MOD.eliteCh) { elite = true; surprise = true; }
+    const eliteCh = (ACTIVE_MOD.eliteCh || 0) + ascFx("eliteCh", 0);
+    if (!elite && room.key === "battle" && eliteCh && Math.random() < eliteCh) { elite = true; surprise = true; }
     const e = genEnemy(floor, elite, elite && !surprise ? eliteTraitPreview : null); e.hp = e.maxHp;
     if (stats.startStun > 0) { applyStatus(e, "stun", 1); addLog(`⏱️ 時が砕け、${e.name}は動けない！`, "info"); } // 時砕きの懐中時計
     setEnemy(e);
@@ -1844,8 +1932,8 @@ export default function HackRoguelike() {
     setForgeSkill(null);
   };
 
-  const potionPrice = Math.round((25 + floor * 10) * (ACTIVE_MOD.shopMult || 1) * (1 - (stats.shopDiscount || 0) / 100));
-  const itemPrice = Math.round((50 + floor * 20) * (ACTIVE_MOD.shopMult || 1) * (1 - (stats.shopDiscount || 0) / 100));
+  const potionPrice = Math.round((25 + floor * 10) * (ACTIVE_MOD.shopMult || 1) * ascFx("shopMult") * (1 - (stats.shopDiscount || 0) / 100));
+  const itemPrice = Math.round((50 + floor * 20) * (ACTIVE_MOD.shopMult || 1) * ascFx("shopMult") * (1 - (stats.shopDiscount || 0) / 100));
   const buyPotion = () => {
     if (player.gold < potionPrice || player.hooks?.noPotion) return;
     setPlayer(p => ({ ...p, gold: p.gold - potionPrice, potions: p.potions + 1 }));
@@ -2344,8 +2432,13 @@ export default function HackRoguelike() {
         <div style={{ textAlign: "center", color: CLASSES[player.cls]?.color || "#a8a29e", fontSize: 13, marginTop: -6, marginBottom: 6 }}>
           {CLASSES[player.cls]?.icon} {CLASSES[player.cls]?.name}〈型:{(CLASS_VARIANTS[player.cls] || []).find(v => v.key === (player.variant || "a"))?.name || "-"}〉　<span style={{ color: DIFFICULTIES[player.diff || "normal"].color }}>{DIFFICULTIES[player.diff || "normal"].icon}{DIFFICULTIES[player.diff || "normal"].name}</span>
         </div>
-        {(player.mod && player.mod !== "none") || player.blessing ? (
+        {(player.mod && player.mod !== "none") || player.blessing || (player.ascension || []).length > 0 ? (
           <div style={{ marginBottom: 12 }}>
+            {(player.ascension || []).length > 0 && (
+              <div style={{ textAlign: "center", fontSize: 12, marginBottom: 4 }}>
+                <span style={{ color: "#c084fc", fontWeight: 700 }}>🌑深淵の彼方×{player.ascension.length}:{player.ascension.map(k => ASCENSION_MAP[k]?.name).filter(Boolean).join("・")}</span>
+              </div>
+            )}
             {player.mod && player.mod !== "none" && (
               <div style={{ textAlign: "center", fontSize: 12, marginBottom: player.blessing ? 4 : 0 }}>
                 <span style={{ color: "#c4b5fd", fontWeight: 700 }}>世界:{getMod(player.mod).icon}{getMod(player.mod).name}</span>
@@ -2447,11 +2540,15 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.36 — 敵24種・闘技場(連戦部屋)・ゾーン12種・出自10種・ボス3択化・イベント追加</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.37 — 深淵の彼方(プレステージ)・図鑑・鏡の間を追加</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
-      <button onClick={() => setScene("classSelect")} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
+      <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
+      {(meta.best || 0) >= FINAL_FLOOR && (
+        <button onClick={() => setScene("ascendSelect")} style={{ ...btnStyle(false, "#1c1917"), border: "1px solid #7c3aed", flex: "none", padding: "12px 48px", fontSize: 14, marginBottom: 10 }}>🌑 深淵の彼方</button>
+      )}
       <button onClick={() => setScene("altar")} style={{ ...btnStyle(false, "#5b21b6"), flex: "none", padding: "12px 48px", fontSize: 14, marginBottom: 10 }}>👻 魂の祭壇(恒久強化)</button>
+      <button onClick={() => setScene("codex")} style={{ ...btnStyle(false, "#164e63"), flex: "none", padding: "12px 48px", fontSize: 14, marginBottom: 10 }}>📖 図鑑</button>
       <button onClick={toggleMute} style={{ background: "none", border: "1px solid #44403c", color: "#a8a29e", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{muted ? "🔇 サウンドOFF" : "🔊 サウンドON"}</button>
     </div>
   );
@@ -2480,6 +2577,68 @@ export default function HackRoguelike() {
       <button onClick={() => setScene("title")} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 6 }}>タイトルへ戻る</button>
     </div>
   );
+
+  // ===== 深淵の彼方(プレステージ:好きな特性を好きな数だけ積んで挑む) =====
+  if (scene === "ascendSelect") return (
+    <div style={wrap}>
+      <h2 style={{ color: "#c084fc", textAlign: "center", fontSize: 20, fontWeight: 800 }}>🌑 深淵の彼方</h2>
+      <p style={{ textAlign: "center", color: "#a8a29e", fontSize: 12, marginBottom: 4 }}>特性を好きな数だけ選んで積む。積んだ数だけ塔は厳しくなるが、獲得できる魂も増える</p>
+      <p style={{ textAlign: "center", color: "#c084fc", fontSize: 14, fontWeight: 800, marginBottom: 14 }}>選択中:{pendingAscension.length}個{pendingAscension.length > 0 ? `(魂+${pendingAscension.length * 15}%)` : ""}</p>
+      {ASCENSIONS.map(a => {
+        const active = pendingAscension.includes(a.key);
+        return (
+          <button key={a.key} onClick={() => setPendingAscension(cur => active ? cur.filter(k => k !== a.key) : [...cur, a.key])}
+            style={{ display: "block", width: "100%", textAlign: "left", background: active ? "#1f0d2e" : "#161210", border: `1px solid ${active ? "#c084fc" : "#292524"}`, boxShadow: active ? "0 0 14px rgba(192,132,252,0.35)" : "none", borderRadius: 10, padding: 12, marginBottom: 8, cursor: "pointer", color: "#e7e5e4", fontFamily: "inherit" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: active ? "#c084fc" : "#e7e5e4" }}>{a.icon} {a.name}</span>
+              <span style={{ fontSize: 16 }}>{active ? "✅" : "⬜"}</span>
+            </div>
+            <div style={{ fontSize: 12, color: "#a8a29e" }}>{a.desc}</div>
+          </button>
+        );
+      })}
+      <button onClick={() => setScene("classSelect")} style={{ ...btnStyle(false, "#7c3aed"), width: "100%", marginTop: 10 }}>この設定で挑む</button>
+      <button onClick={() => { setPendingAscension([]); setScene("title"); }} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>タイトルへ戻る</button>
+    </div>
+  );
+
+  // ===== 図鑑(コレクション):敵・レリック・固有能力の発見状況を記録する。プレイに影響しない収集要素 =====
+  if (scene === "codex") {
+    const knownEnemies = new Set(meta.codex?.enemies || []);
+    const knownRelics = new Set(meta.codex?.relics || []);
+    const knownAbilities = new Set(meta.codex?.abilities || []);
+    const Section = ({ title, color, total, known, children }) => (
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ color, fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{title} <span style={{ color: "#78716c", fontWeight: 400, fontSize: 12 }}>({known}/{total})</span></div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{children}</div>
+      </div>
+    );
+    const Chip = ({ found, icon, name, desc, color }) => (
+      <div style={{ background: "#161210", border: `1px solid ${found ? color : "#292524"}`, borderRadius: 8, padding: "6px 10px", fontSize: 11, color: found ? "#e7e5e4" : "#44403c", minWidth: 120 }}>
+        <div style={{ fontWeight: 700 }}>{found ? icon : "？"} {found ? name : "未発見"}</div>
+        {found && desc && <div style={{ color: "#a8a29e", marginTop: 2 }}>{desc}</div>}
+      </div>
+    );
+    return (
+      <div style={wrap}>
+        <h2 style={{ color: "#5eead4", textAlign: "center", fontSize: 20, fontWeight: 800 }}>📖 図鑑</h2>
+        <p style={{ textAlign: "center", color: "#a8a29e", fontSize: 12, marginBottom: 16 }}>これまでのランで出会った敵・手にしたレリック・見つけた固有能力の記録</p>
+        <Section title="👹 敵図鑑" color="#f87171" total={ENEMIES.length} known={ENEMIES.filter(e => knownEnemies.has(e.name)).length}>
+          {ENEMIES.map(e => <Chip key={e.name} found={knownEnemies.has(e.name)} icon={e.icon} name={e.name} desc={GIMMICKS[e.gimmick]?.name} color="#f87171" />)}
+        </Section>
+        <Section title="👑 ボス図鑑" color="#fbbf24" total={ALL_BOSSES.length} known={ALL_BOSSES.filter(e => knownEnemies.has(e.name)).length}>
+          {ALL_BOSSES.map(e => <Chip key={e.name} found={knownEnemies.has(e.name)} icon={e.icon} name={e.name} color="#fbbf24" />)}
+        </Section>
+        <Section title="💠 レリック図鑑" color="#c084fc" total={RELICS.length} known={RELICS.filter(r => knownRelics.has(r.key)).length}>
+          {RELICS.map(r => <Chip key={r.key} found={knownRelics.has(r.key)} icon={r.icon} name={r.name} desc={r.desc} color="#c084fc" />)}
+        </Section>
+        <Section title="✦ 固有能力図鑑" color="#f97316" total={ABILITIES.length} known={ABILITIES.filter(a => knownAbilities.has(a.key)).length}>
+          {ABILITIES.map(a => <Chip key={a.key} found={knownAbilities.has(a.key)} icon={a.name[0]} name={a.name} desc={a.desc} color="#f97316" />)}
+        </Section>
+        <button onClick={() => setScene("title")} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 6 }}>タイトルへ戻る</button>
+      </div>
+    );
+  }
 
   // ===== クラス選択 =====
   if (scene === "classSelect") return (
@@ -2579,14 +2738,14 @@ export default function HackRoguelike() {
         {originChoices.map(ok => {
           const o = ORIGINS.find(x => x.key === ok);
           return (
-            <button key={ok} onClick={() => startRun(pendingClass || "warrior", pendingDiff || "normal", pendingBlessing, runModKey, pendingVariant, ok)}
+            <button key={ok} onClick={() => startRun(pendingClass || "warrior", pendingDiff || "normal", pendingBlessing, runModKey, pendingVariant, ok, pendingAscension)}
               style={{ display: "block", width: "100%", textAlign: "left", background: "#101816", border: "1px solid #5eead4", borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer", color: "#e7e5e4", fontFamily: "inherit" }}>
               <div style={{ fontWeight: 700, fontSize: 15, color: "#5eead4" }}>{o.icon} {o.name}</div>
               <div style={{ fontSize: 13, color: "#a8a29e" }}>{o.desc}</div>
             </button>
           );
         })}
-        <button onClick={() => startRun(pendingClass || "warrior", pendingDiff || "normal", pendingBlessing, runModKey, pendingVariant, null)}
+        <button onClick={() => startRun(pendingClass || "warrior", pendingDiff || "normal", pendingBlessing, runModKey, pendingVariant, null, pendingAscension)}
           style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 4 }}>手ぶらで挑む(出自なし)</button>
       </div>
     );
@@ -2944,8 +3103,14 @@ export default function HackRoguelike() {
       <div style={{ textAlign: "center", color: "#57534e", fontSize: 11, marginBottom: 4 }}>
         HP {Math.max(0, player.hp)} / {stats.maxHp}　🧪×{player.potions}　💰{player.gold} G
       </div>
-      {(player.mod && player.mod !== "none") || player.blessing ? (
+      {(player.mod && player.mod !== "none") || player.blessing || (player.ascension || []).length > 0 ? (
         <div style={{ textAlign: "center", fontSize: 11, marginBottom: 8 }}>
+          {(player.ascension || []).length > 0 && (
+            <div style={{ color: "#c084fc" }}>
+              <span style={{ fontWeight: 700 }}>🌑深淵の彼方×{player.ascension.length}</span>
+              <span style={{ color: "#78716c" }}> — {player.ascension.map(k => ASCENSION_MAP[k]?.name).filter(Boolean).join("・")}</span>
+            </div>
+          )}
           {player.mod && player.mod !== "none" && (
             <div style={{ color: "#c4b5fd" }}>
               <span style={{ fontWeight: 700 }}>{getMod(player.mod).icon} {getMod(player.mod).name}</span>
@@ -3004,8 +3169,14 @@ export default function HackRoguelike() {
           {statusBtn}
         </div>
       </div>
-      {(player.mod && player.mod !== "none") || player.blessing ? (
+      {(player.mod && player.mod !== "none") || player.blessing || (player.ascension || []).length > 0 ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+          {(player.ascension || []).length > 0 && (
+            <div style={{ fontSize: 11, color: "#e9d5ff", background: "#1f0d2e", border: "1px solid #c084fc", borderRadius: 6, padding: "3px 8px" }}>
+              <span style={{ fontWeight: 700 }}>🌑 深淵の彼方×{player.ascension.length}</span>
+              <span style={{ color: "#a8a29e" }}> — {player.ascension.map(k => ASCENSION_MAP[k]?.name).filter(Boolean).join("・")}</span>
+            </div>
+          )}
           {player.mod && player.mod !== "none" && (
             <div style={{ fontSize: 11, color: "#c4b5fd", background: "#1a1024", border: "1px solid #7c3aed", borderRadius: 6, padding: "3px 8px" }}>
               <span style={{ fontWeight: 700 }}>{getMod(player.mod).icon} {getMod(player.mod).name}</span>
