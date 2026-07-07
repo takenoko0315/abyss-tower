@@ -89,6 +89,12 @@ const MODIFIERS = [
   { key: "noshop", name: "商人なき世界", icon: "🚫", desc: "商人と鍛冶屋が一切現れない。代わりに全装備のレア度が上がりやすい", banShops: true, rarityBonus: 1 },
   { key: "eliteworld", name: "精鋭の世界", icon: "💀", desc: "通常戦闘が30%でエリートにすり替わる。エリートのレリック所持率が大幅UP", eliteCh: 0.3, eliteRelic: 0.4 },
   { key: "mist", name: "迷いの霧", icon: "🌁", desc: "分岐路の行き先が見えない。代わりにゴールド・XP+30%", hidePaths: true, gold: 1.3, xp: 1.3 },
+  { key: "goldrush", name: "黄金熱", icon: "🤑", desc: "ゴールド獲得+60%。ただし商人の価格+25%", gold: 1.6, shopMult: 1.25 },
+  { key: "scholar", name: "学びの風", icon: "📜", desc: "獲得XP+40%。敵HP+10%", xp: 1.4, enemyHp: 1.1 },
+  { key: "bonfire", name: "篝火の加護", icon: "🕯️", desc: "焚き火の回復量+50%。敵の攻撃+10%", restMult: 1.5, enemyAtk: 1.1 },
+  { key: "caravan", name: "商隊の往来", icon: "🐫", desc: "商人・鍛冶屋が現れやすい。装備ドロップ率-10%", tradeBias: true, dropBonus: -0.1 },
+  // ルール級:塔の強さの序列が逆転する
+  { key: "inverted", name: "逆巻く塔", icon: "🌪️", desc: "雑魚のHP・攻撃+20%。代わりにボスが弱まる(-20%)", nonBossMult: 1.2, bossMult: 0.8 },
   { key: "none", name: "平穏", icon: "🕊️", desc: "特別な影響はない" },
 ];
 let ACTIVE_MOD = MODIFIERS[MODIFIERS.length - 1];
@@ -137,6 +143,10 @@ const ZONES = {
   dreamcorridor: { key: "dreamcorridor", name: "夢幻の回廊", icon: "🌌", desc: "足を踏み入れた瞬間、気まぐれな祝福がランダムに宿る(内容は入るまでわからない)" },
   wasteland: { key: "wasteland", name: "灼けた荒野", icon: "🏜️", desc: "あなたの炎上ダメージ+5%pt。敵HP+10%", burnBoost: 0.05, enemyHp: 1.1 },
   archive: { key: "archive", name: "静寂の書庫", icon: "📚", desc: "スキルのクールダウン+1ターン。代わりにスキルダメージ+35%", skillCdPenalty: 1, skillDmgBoost: 35 },
+  hungry: { key: "hungry", name: "餓えの回廊", icon: "🍖", desc: "敵の攻撃+10%。だが倒した敵からのゴールド+40%", enemyAtk: 1.1, gold: 1.4 },
+  windridge: { key: "windridge", name: "風走りの高台", icon: "🌬️", desc: "あなたの回避+8%。だが敵の攻撃+10%。連撃・会心系の装備が出やすい", playerDodge: 8, enemyAtk: 1.1, affixBias: ["double", "crit"] },
+  springs: { key: "springs", name: "癒しの水脈", icon: "💧", desc: "階を進むたびHPが5%回復する。敵HP+15%", floorHeal: 0.05, enemyHp: 1.15 },
+  forgehall: { key: "forgehall", name: "地下鍛冶場", icon: "⚒️", desc: "鍛冶屋が現れやすく、強化・改造費用が20%安い。敵HP+10%", forgeBias: true, forgeDiscount: 0.2, enemyHp: 1.1 },
 };
 const DREAM_BUFFS = [
   { key: "atk", label: "攻撃力+8", stat: { atk: 8 } },
@@ -708,9 +718,9 @@ function genEnemy(floor, elite = false, traitKey = null) {
     name: elite ? `エリート・${base.name}` : base.name,
     codexId: base.name, // 図鑑用の不変キー(エリート化・分裂・不死化しても元の種族名を保つ)
     isBoss, isElite: elite, isFinal, trait,
-    maxHp: Math.round((22 + rand(0, 10)) * scale * hpMult * (isBoss ? 1 : 1.3) * (ACTIVE_MOD.enemyHp || 1) * (ACTIVE_ZONE.enemyHp || 1) * ascFx("enemyHp")), // 雑魚HP+30%(Ver.34:戦闘を長期戦寄りに)
+    maxHp: Math.round((22 + rand(0, 10)) * scale * hpMult * (isBoss ? 1 : 1.3) * (ACTIVE_MOD.enemyHp || 1) * (ACTIVE_ZONE.enemyHp || 1) * ascFx("enemyHp") * (isBoss ? (ACTIVE_MOD.bossMult || 1) : (ACTIVE_MOD.nonBossMult || 1))), // 雑魚HP+30%(Ver.34:戦闘を長期戦寄りに)。逆巻く塔はボスと雑魚の強さが逆転
     hp: 0, // 後で設定
-    atk: Math.round((5 + rand(0, 3)) * scale * atkMult * (ACTIVE_MOD.enemyAtk || 1) * (ACTIVE_ZONE.enemyAtk || 1) * ascFx("enemyAtk")),
+    atk: Math.round((5 + rand(0, 3)) * scale * atkMult * (ACTIVE_MOD.enemyAtk || 1) * (ACTIVE_ZONE.enemyAtk || 1) * ascFx("enemyAtk") * (isBoss ? (ACTIVE_MOD.bossMult || 1) : (ACTIVE_MOD.nonBossMult || 1))),
     xp: Math.round((14 + floor * 12) * xpMult * rewardScale), // 成長を速める(旧: 12+floor*10)
     goldScale: rewardScale,
     atkBuff: 1, // 咆哮による攻撃力上昇の累積
@@ -800,6 +810,8 @@ function totalStats(player, equip) {
   if (ACTIVE_ZONE.playerLifesteal) t.lifesteal += ACTIVE_ZONE.playerLifesteal;
   if (ACTIVE_ZONE.playerDouble) t.double += ACTIVE_ZONE.playerDouble;
   if (ACTIVE_ZONE.playerThorns) t.thorns += ACTIVE_ZONE.playerThorns;
+  if (ACTIVE_ZONE.playerDodge) t.dodge = (t.dodge || 0) + ACTIVE_ZONE.playerDodge; // 風走りの高台:回避
+
   if (ACTIVE_ZONE.randomBuff) for (const [k, v] of Object.entries(ACTIVE_ZONE.randomBuff)) t[k] = (t[k] || 0) + v; // 夢幻の回廊:気まぐれな祝福
   for (const slot of SLOT_KEYS) {
     const it = equip[slot];
@@ -1551,6 +1563,12 @@ export default function HackRoguelike() {
   };
 
   const enterFloor = (nf) => {
+    // 癒しの水脈:階を進むたびHPが回復する
+    if (ACTIVE_ZONE.floorHeal && player.hp > 0 && player.hp < stats.maxHp) {
+      const fh = Math.max(1, Math.round(stats.maxHp * ACTIVE_ZONE.floorHeal));
+      setPlayer(p => ({ ...p, hp: Math.min(stats.maxHp, p.hp + fh) }));
+      addLog(`💧 水脈の癒し (+${fh} HP)`, "heal");
+    }
     if (nf % 5 === 0) {
       const e = genEnemy(nf); e.hp = e.maxHp;
       if (stats.startStun > 0) { applyStatus(e, "stun", 1); addLog(`⏱️ 時が砕け、${e.name}は動けない！`, "info"); } // 時砕きの懐中時計
@@ -1565,6 +1583,8 @@ export default function HackRoguelike() {
     let roomPool = [...ROOMS.slice(1)];
     if (nf < 3) roomPool = roomPool.filter(r => r.key !== "doppel"); // 鏡の間は序盤(1〜2F)には出さない
     if (ACTIVE_ZONE.shopBias) roomPool.push(ROOMS.find(r => r.key === "shop")); // 黄金の回廊:商人が出やすい
+    if (ACTIVE_ZONE.forgeBias) roomPool.push(ROOMS.find(r => r.key === "forge")); // 地下鍛冶場:鍛冶屋が出やすい
+    if (ACTIVE_MOD.tradeBias) roomPool.push(ROOMS.find(r => r.key === "shop"), ROOMS.find(r => r.key === "forge")); // 商隊の往来:商人・鍛冶屋が出やすい
     if (ACTIVE_MOD.banShops) roomPool = roomPool.filter(r => r.key !== "shop" && r.key !== "forge"); // 商人なき世界
     const extras = [];
     for (const r of roomPool.sort(() => Math.random() - 0.5)) {
@@ -1601,7 +1621,7 @@ export default function HackRoguelike() {
 
   const chooseRoom = (room) => {
     if (room.key === "rest") {
-      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult"));
+      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult") * (ACTIVE_MOD.restMult || 1));
       setPlayer(p => ({ ...p, hp: Math.min(stats.maxHp, p.hp + heal) }));
       addLog(`${floor}F:焚き火で休んだ (+${heal} HP)`, "heal");
       nextFloor();
@@ -1628,7 +1648,7 @@ export default function HackRoguelike() {
       let evKey;
       if (player.demonDeal && Math.random() < 0.22) evKey = "demon2";
       else if (Math.random() < 0.1) evKey = "fairy";
-      else evKey = pick(["demon", "gamble", "spring", "statue", "wagon", "box", "altar", "mirror", "duelist", "peddler", "bloodpool", "hermit", "starpool"]);
+      else evKey = pick(["demon", "gamble", "spring", "statue", "wagon", "box", "altar", "mirror", "duelist", "peddler", "bloodpool", "hermit", "starpool", "trainer", "cursesmith", "bard"]);
       setCurrentEvent(evKey);
       setScene("eventChoice");
       return;
@@ -1903,6 +1923,53 @@ export default function HackRoguelike() {
         } },
       ],
     },
+    {
+      key: "trainer", icon: "🏋️", title: "流浪の武術家",
+      desc: "「鍛えてやろうか?本気の稽古は安くないぞ」",
+      choices: [
+        { label: `稽古をつけてもらう(${50 + floor * 12}G、XP +${30 + floor * 18})`, disabled: () => player.gold < 50 + floor * 12, run: () => {
+          setPlayer(p => ({ ...p, gold: p.gold - (50 + floor * 12), xp: p.xp + 30 + floor * 18 }));
+          addLog(`${floor}F:🏋️ 稽古で経験を積んだ (+${30 + floor * 18} XP)`, "gold"); nextFloor();
+        } },
+        { label: `型を見学する(無料、XP +${8 + floor * 4})`, run: () => {
+          setPlayer(p => ({ ...p, xp: p.xp + 8 + floor * 4 }));
+          addLog(`${floor}F:🏋️ 見取り稽古で少し学んだ (+${8 + floor * 4} XP)`, "gold"); nextFloor();
+        } },
+      ],
+    },
+    {
+      key: "cursesmith", icon: "🧵", title: "呪具師",
+      desc: "「呪いは毒じゃない、スパイスさ。飼いならした者から強くなる」",
+      choices: [
+        { label: "呪い装備を磨いてもらう(呪い装備1つが+2強化)", disabled: () => !SLOT_KEYS.some(s => equip[s]?.curse), run: () => {
+          const slots = SLOT_KEYS.filter(s => equip[s]?.curse);
+          const slot = pick(slots);
+          setEquip(eq => ({ ...eq, [slot]: { ...eq[slot], plus: (eq[slot].plus || 0) + 2 } }));
+          addLog(`${floor}F:🧵 ${equip[slot].name}が呪いごと磨き上げられた(+2強化)`, "gold"); nextFloor();
+        } },
+        { label: "呪いを刻んでもらう(装備1つに呪いが付くが+3強化)", disabled: () => !SLOT_KEYS.some(s => equip[s] && !equip[s].curse), run: () => {
+          const slots = SLOT_KEYS.filter(s => equip[s] && !equip[s].curse);
+          const slot = pick(slots);
+          const c = pick(CURSES);
+          setEquip(eq => ({ ...eq, [slot]: { ...eq[slot], curse: c.key, name: "呪われた" + eq[slot].name.replace("浄化された", ""), plus: (eq[slot].plus || 0) + 3 } }));
+          addLog(`${floor}F:🧵 ${SLOTS[slot].name}に「${c.name}」が刻まれ、大きく強化された(+3)`, "hurt"); nextFloor();
+        } },
+        { label: "立ち去る", run: () => { addLog(`${floor}F:呪具師に背を向けた`, "info"); nextFloor(); } },
+      ],
+    },
+    {
+      key: "bard", icon: "🎻", title: "放浪の吟遊詩人",
+      desc: "澄んだ歌声が塔に響く。聴いていると体が軽くなっていく",
+      choices: [
+        { label: "歌に聴き入る(HP20%回復+全スキルのCDリセット)", run: () => {
+          const heal = Math.round(stats.maxHp * 0.2);
+          setPlayer(p => ({ ...p, hp: Math.min(stats.maxHp, p.hp + heal) }));
+          setCds({});
+          addLog(`${floor}F:🎻 歌声に癒された (+${heal} HP・スキルCD全回復)`, "heal"); nextFloor();
+        } },
+        { label: "先を急ぐ", run: () => { addLog(`${floor}F:歌声を背に先を急いだ`, "info"); nextFloor(); } },
+      ],
+    },
   ];
 
   // 隠者の試練:3つの壺はどれを選んでも同じ確率(45%回復・35%金貨・20%ダメージ)。中身は選んだ後までわからない
@@ -1924,7 +1991,7 @@ export default function HackRoguelike() {
     nextFloor();
   };
 
-  const skillModPrice = Math.round((70 + floor * 18) * (1 - (stats.shopDiscount || 0) / 100));
+  const skillModPrice = Math.round((70 + floor * 18) * (1 - (stats.shopDiscount || 0) / 100) * (1 - (ACTIVE_ZONE.forgeDiscount || 0)));
   const applySkillMod = (skillKey, modKey) => {
     if (player.gold < skillModPrice) return;
     setPlayer(p => ({ ...p, gold: p.gold - skillModPrice, skillMods: { ...(p.skillMods || {}), [skillKey]: modKey } }));
@@ -1949,8 +2016,9 @@ export default function HackRoguelike() {
   };
 
   // 強化費用は「その装備の強化回数」で指数関数的に増える(階数には依存しない)
-  const enhanceCost = Math.round((forgeSlot && equip[forgeSlot] ? Math.round(45 * Math.pow(1.35, equip[forgeSlot].plus || 0)) : 45) * (1 - (stats.shopDiscount || 0) / 100));
-  const forgeCosts = { enhance: enhanceCost, affix: Math.round((60 + floor * 20) * (1 - (stats.shopDiscount || 0) / 100)), reroll: Math.round((30 + floor * 12) * (1 - (stats.shopDiscount || 0) / 100)) };
+  const forgeCut = (1 - (stats.shopDiscount || 0) / 100) * (1 - (ACTIVE_ZONE.forgeDiscount || 0)); // 密偵の眼×地下鍛冶場の割引を合算
+  const enhanceCost = Math.round((forgeSlot && equip[forgeSlot] ? Math.round(45 * Math.pow(1.35, equip[forgeSlot].plus || 0)) : 45) * forgeCut);
+  const forgeCosts = { enhance: enhanceCost, affix: Math.round((60 + floor * 20) * forgeCut), reroll: Math.round((30 + floor * 12) * forgeCut) };
   const doForge = (op) => {
     const slot = forgeSlot;
     if (!slot || !equip[slot] || player.gold < forgeCosts[op]) return;
@@ -2540,7 +2608,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.37 — 深淵の彼方(プレステージ)・図鑑・鏡の間を追加</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.38 — 世界+6種・ゾーン+4種・イベント+3種(ランの多様性UP)</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
