@@ -352,6 +352,18 @@ export default function HackRoguelike() {
     const items = [...SLOT_KEYS.map(sk => equip[sk]), drop, shopItem].filter(Boolean);
     recordCodex("abilities", items.filter(it => it.ability).map(it => it.ability));
   }, [equip, drop, shopItem, recordCodex]);
+  // 開発用チートAPI(devサーバー限定・本番ビルドには入らない)。詳細はCLAUDE.md参照
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    window.abyss = {
+      gold: (n = 500) => setPlayer(p => ({ ...p, gold: p.gold + n })),
+      souls: (n = 500) => setMeta(m => { const nm = { ...m, souls: m.souls + n }; metaStorageSave(nm); return nm; }),
+      heal: () => setPlayer(p => ({ ...p, hp: totalStats(p, equip).maxHp })),
+      weaken: () => setEnemy(e => e ? { ...e, hp: 1 } : e),
+      jump: (f) => { setFloor(f); enterFloor(f); },
+      best: (n = 20) => setMeta(m => { const nm = { ...m, best: n }; metaStorageSave(nm); return nm; }),
+    };
+  });
   const toggleMute = () => {
     setMuted(mu => {
       const next = !mu;

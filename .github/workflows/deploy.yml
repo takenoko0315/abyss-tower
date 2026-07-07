@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
+      - run: npm run lint
+      - run: npm test
       - run: npx vite build --base=/${{ github.event.repository.name }}/
       - uses: actions/upload-pages-artifact@v3
         with:
