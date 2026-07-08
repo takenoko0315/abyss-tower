@@ -26,7 +26,7 @@ export const BLESSINGS = [
   { key: "bloodb", icon: "💉", name: "輸血の契約", desc: "HPが25%以下になるたび、自動で回復薬を1つ消費して回復する(ラン中3回まで)", apply: p => ({ ...p, autoPotionLeft: 3 }) },
   { key: "wind", icon: "👥", name: "刹那の連撃", desc: "最初の戦闘中、攻撃が常に連撃になる", apply: p => ({ ...p, firstFightDoubleGuaranteed: true }) },
   { key: "wealth", icon: "🕵️", name: "密偵の眼", desc: "商人・鍛冶屋の価格が永続で20%割引になる", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), shopDiscount: 20 } }) },
-  { key: "sageb", icon: "🌳", name: "賢者の祝福", desc: "攻撃力 +4・最大HP +20", apply: p => ({ ...p, atk: p.atk + 4, maxHp: p.maxHp + 20, hp: p.hp + 20 }) },
+  { key: "sageb", icon: "🌳", name: "賢者の祝福", desc: "覚醒P+1を持って開始(クラスアビリティを1つ多く解放できる)", apply: p => ({ ...p, ap: (p.ap || 0) + 1 }) },
   { key: "alchemyb", icon: "♻️", name: "不朽の水筒", desc: "回復薬を使用しても40%の確率で消費しない", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), potionSaveCh: 40 } }) },
   { key: "venomb", icon: "🟣", name: "毒の祝福", desc: "「毒刃」を最初から習得・装備", learnSkill: "poisonblade" },
   { key: "flameb", icon: "🔥", name: "炎の祝福", desc: "「火炎斬」を最初から習得・装備", learnSkill: "flamestrike" },
@@ -43,6 +43,13 @@ export const BLESSINGS = [
   { key: "ks_bloodbowl", icon: "🥣", keystone: true, name: "血染めの杯", desc: "【契約】吸血+15%。だが毎ターン最大HPの3%を失い続ける", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), lifesteal: 15, drainPerTurn: 3 } }) },
   { key: "ks_chaos", icon: "🎲", keystone: true, name: "深淵の賽", desc: "【契約】与ダメも被ダメも、常に50%で1.5倍・50%で0.66倍になる", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), chaosDice: 1 } }) },
 ];
+// クラスの根幹と矛盾する契約は候補から除外する(選ぶ意味のない3択を防ぐ)
+export const KEYSTONE_EXCLUDE = {
+  warrior: ["ks_giant"],              // 闘志解放=確定クリなのでクリ禁止と矛盾
+  assassin: ["ks_giant", "ks_leaden"], // クリ・連撃がクラスの核
+  mage: ["ks_silence"],               // スキル禁止はクラスの核と矛盾
+  vampire: [],
+};
 
 // ===== 出自(ラン開始時にビルドの起点を選ぶ。固有装備+以後のドロップ傾向) =====
 export const ORIGINS = [
@@ -501,7 +508,7 @@ export const RELICS = [
   { key: "abyssring", name: "深淵の指輪", icon: "💍", desc: "攻撃力 +6、防御力 +6", stat: { atk: 6, def: 6 } },
   { key: "bloodtear", name: "血涙の宝珠", icon: "💧", desc: "敵撃破時、最大HPの15%回復", stat: { onKillHeal: 15 } },
   { key: "fairydust", name: "妖精の粉", icon: "✨", desc: "敵の攻撃を10%で完全に回避する", stat: { dodge: 10 } },
-  { key: "wardrum", name: "怒りの太鼓", icon: "🥁", desc: "状態異常中の敵への与ダメ +20%", stat: { dmgVsStatus: 20 } },
+  { key: "wardrum", name: "戦いの太鼓", icon: "🥁", desc: "全ての与ダメージ +10%", stat: { flatDmg: 10 } },
   { key: "executioner_hourglass", name: "終焉の砂時計", icon: "⏳", desc: "敵HP15%以下への与ダメ +50%", stat: { executeBonus: 50 } },
   { key: "snowballblade", name: "加速する連撃", icon: "🌀", desc: "連撃が発生するたび、その戦闘中は連撃率+4%ずつ蓄積(最大+20%)", stat: { doubleSnowball: 4 } },
   { key: "critripple", name: "会心の波紋", icon: "💠", desc: "クリティカル時、15%の確率でもう1回攻撃が発生する", stat: { critRipple: 15 } },

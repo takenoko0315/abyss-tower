@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import {
-  RARITIES, DIFFICULTIES, BLESSINGS, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, ALL_BOSSES, PERKS, SKILLS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, FINAL_PATTERN, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
+  RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, ALL_BOSSES, PERKS, SKILLS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, FINAL_PATTERN, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
 } from "./game/data.js";
 import { SFX, setSfxMuted } from "./game/sfx.js";
 import { metaStorageLoad, metaStorageSave } from "./game/storage.js";
@@ -240,6 +240,8 @@ function totalStats(player, equip) {
   if (player.cls === "vampire" && hasNode(player, "v9")) {
     t.lifesteal += Math.min(10, Math.floor(t.maxHp / 100));
   }
+  // 回避は上限40%(装備・祝福・ゾーンを重ねても実質無敵にならないように)
+  if (t.dodge) t.dodge = Math.min(40, t.dodge);
   return t;
 }
 
@@ -311,6 +313,8 @@ export default function HackRoguelike() {
   const [cds, setCds] = useState({});
   const [forgeSlot, setForgeSlot] = useState(null);
   const [relicGot, setRelicGot] = useState(null);
+  const [relicChoices, setRelicChoices] = useState([]);
+  const [skillChoices, setSkillChoices] = useState([]);
   const [pendingKill, setPendingKill] = useState(null);
   const [pendingClass, setPendingClass] = useState(null);
   const [pendingVariant, setPendingVariant] = useState("a");
@@ -484,7 +488,7 @@ export default function HackRoguelike() {
     if (stats.berserk > 0) { mult *= 1.25; notes.push("狂戦士+25%"); }
     if (stats.bossSlayer > 0 && enemy && (enemy.isBoss || enemy.isElite)) { mult *= 1 + stats.bossSlayer / 100; notes.push(`王殺し+${stats.bossSlayer}%`); }
     if (stats.executeBonus > 0 && enemy && enemy.hp / enemy.maxHp <= 0.15) { mult *= 1 + stats.executeBonus / 100; notes.push(`終焉+${stats.executeBonus}%`); }
-    if (stats.flatDmg > 0) { mult *= 1 + stats.flatDmg / 100; notes.push(`契約+${stats.flatDmg}%`); }
+    if (stats.flatDmg > 0) { mult *= 1 + stats.flatDmg / 100; notes.push(`与ダメ強化+${stats.flatDmg}%`); }
     if (!forSkill && stats.basicBonus > 0) { mult *= 1 + stats.basicBonus / 100; notes.push(`無音の誓い+${stats.basicBonus}%`); }
     if (stats.chaosDice > 0) notes.push("深淵の賽:さらに変動(×1.5 or ×0.66)");
     if (stats.gambleDmg > 0) notes.push("気まぐれな打撃:さらに変動(×1.5 or ×0.7)");
@@ -751,20 +755,9 @@ export default function HackRoguelike() {
     if (np.xp >= need) {
       if (np.discountNextLevel) np = { ...np, discountNextLevel: false };
       np = { ...np, xp: np.xp - need, level: np.level + 1 };
-      const known = np.knownSkills || np.skills;
-      const learnable = Object.entries(SKILLS).filter(([k, s]) => !known.includes(k) && (!s.locked || metaOwned("skill_" + k) > 0));
-      const skillPerks = known.length >= SKILL_CAP ? [] : learnable.map(([k, s]) => ({
-        key: "skill_" + k,
-        name: `習得:${s.icon} ${s.name}`,
-        desc: `${s.desc}(CD${s.cd})【習得枠 ${known.length}/${SKILL_CAP}】${np.skills.length >= 3 ? " ※装備枠満杯のため習得のみ。ツリー画面で入れ替え可" : ""}`,
-        apply: pl => {
-          const nk = [...(pl.knownSkills || pl.skills), k];
-          const eq = pl.skills.length < 3 ? [...pl.skills, k] : pl.skills;
-          return { ...pl, knownSkills: nk, skills: eq };
-        },
-      }));
+      // スキル習得はレベルアップから分離した(Ver.39〜)。「修練の間」で3択から選ぶ方式
       const perkPool = PERKS.filter(pk => !(np.hooks?.noPotion && pk.key === "potion")); // 血の渇望:回復薬パークは出ない
-      const choices = [...perkPool, ...skillPerks].sort(() => Math.random() - 0.5).slice(0, 3);
+      const choices = [...perkPool].sort(() => Math.random() - 0.5).slice(0, 3);
       setPerkChoices(choices);
       setPlayer(np);
       SFX.levelup();
@@ -899,22 +892,43 @@ export default function HackRoguelike() {
     // (ボスを一度も抜けられないランでもレリックに触れられるようにする救済)
     const relicChance = e.isBoss ? 1 : e.isElite ? (ACTIVE_MOD.eliteRelic || 0.18) : 0;
     if (relicChance > 0 && Math.random() < relicChance) {
-      const r = randomUnownedRelic(np);
-      if (r) {
+      // Ver.39〜: ランダム1個ではなく、未所持から3択で選ぶ(ビルドを「組む」楽しさを出す)
+      const owned = new Set(np.relics || []);
+      const pool = RELICS.filter(r => !owned.has(r.key)).sort(() => Math.random() - 0.5).slice(0, 3);
+      if (pool.length) {
         setPlayer(np); // ゴールド/XP等はここで確定させる
         setPendingKill(e);
-        setRelicGot(r);
+        setRelicChoices(pool.map(r => r.key));
         SFX.relic();
-        if ((np.relics || []).length >= RELIC_CAP) {
-          setScene("relicSwap"); // 所持上限に達しているため入れ替えを迫る
-        } else {
-          setPlayer({ ...np, relics: [...(np.relics || []), r.key] });
-          setScene("relicGet");
-        }
+        setScene("relicChoice");
         return;
       }
     }
     progressAfterKill(np, e);
+  };
+
+  // レリック3択からの選択。所持上限なら入れ替え画面へ
+  const chooseRelic = (key) => {
+    const r = RELIC_MAP[key];
+    setRelicChoices([]);
+    if ((player.relics || []).length >= RELIC_CAP) {
+      setRelicGot(r);
+      setScene("relicSwap");
+      return;
+    }
+    const updated = { ...player, relics: [...(player.relics || []), key] };
+    setPlayer(updated);
+    addLog(`✨ ${r.icon}${r.name}を手に入れた — ${r.desc}`, "gold");
+    const e = pendingKill;
+    setPendingKill(null);
+    progressAfterKill(updated, e);
+  };
+  const declineRelicChoice = () => {
+    setRelicChoices([]);
+    addLog(`レリックは何も選ばなかった`, "info");
+    const e = pendingKill;
+    setPendingKill(null);
+    progressAfterKill(player, e);
   };
 
   // レリックが上限に達している場合の入れ替え/見送りハンドラー
@@ -951,6 +965,7 @@ export default function HackRoguelike() {
     { key: "event", icon: "❓", name: "？？？", desc: "何が起こるかわからない" },
     { key: "arena", icon: "🏟️", name: "闘技場", desc: "連戦(2体・休憩なし)。ゲージは持ち越し、まとめて報酬+装備確定" },
     { key: "doppel", icon: "🪞", name: "鏡の間", desc: "今の自分自身を写した鏡像と一度だけ戦う。手強いがレア以上の装備確定＋レリックのチャンス" },
+    { key: "dojo", icon: "📖", name: "修練の間", desc: "新たなスキルを3択から1つ習得できる(戦闘なし)" },
   ];
 
   // 闘技場専用の敵生成:連鎖ギミック(分裂・不死)は連戦と噛み合わないため外す
@@ -995,6 +1010,10 @@ export default function HackRoguelike() {
     // 分岐路:戦闘は必ず含め、残り2枠はランダム
     let roomPool = [...ROOMS.slice(1)];
     if (nf < 3) roomPool = roomPool.filter(r => r.key !== "doppel"); // 鏡の間は序盤(1〜2F)には出さない
+    // 修練の間:習得上限か、習得できるスキルが残っていなければ出さない
+    const knownForDojo = player.knownSkills || player.skills;
+    const learnableLeft = Object.entries(SKILLS).some(([k, s]) => !knownForDojo.includes(k) && (!s.locked || metaOwned("skill_" + k) > 0));
+    if (knownForDojo.length >= SKILL_CAP || !learnableLeft) roomPool = roomPool.filter(r => r.key !== "dojo");
     if (ACTIVE_ZONE.shopBias) roomPool.push(ROOMS.find(r => r.key === "shop")); // 黄金の回廊:商人が出やすい
     if (ACTIVE_ZONE.forgeBias) roomPool.push(ROOMS.find(r => r.key === "forge")); // 地下鍛冶場:鍛冶屋が出やすい
     if (ACTIVE_MOD.tradeBias) roomPool.push(ROOMS.find(r => r.key === "shop"), ROOMS.find(r => r.key === "forge")); // 商隊の往来:商人・鍛冶屋が出やすい
@@ -1096,6 +1115,23 @@ export default function HackRoguelike() {
       regenOnCombatStart();
       setScene("combat");
       addLog(`${floor}F:🪞 鏡の間 — ${e.name}が立ちはだかる！(一度だけの戦い)`, "hurt");
+      return;
+    }
+    if (room.key === "dojo") {
+      // 修練の間:未習得スキルから3択で1つ学べる(レベルアップからスキル習得を分離した受け皿)
+      const known = player.knownSkills || player.skills;
+      const learnable = Object.entries(SKILLS)
+        .filter(([k, s]) => !known.includes(k) && (!s.locked || metaOwned("skill_" + k) > 0))
+        .map(([k]) => k);
+      if (!learnable.length) {
+        // 出現ガードをすり抜けた場合の保険(習得直後の同一階など)
+        setPlayer(p => ({ ...p, potions: p.hooks?.noPotion ? p.potions : p.potions + 1 }));
+        addLog(`${floor}F:📖 師範は「もう教えることはない」と回復薬をくれた`, "heal");
+        nextFloor();
+        return;
+      }
+      setSkillChoices([...learnable].sort(() => Math.random() - 0.5).slice(0, 3));
+      setScene("dojo");
       return;
     }
     let elite = room.key === "elite";
@@ -2021,7 +2057,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.38 — 世界+6種・ゾーン+4種・イベント+3種(ランの多様性UP)</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.39 — レリック報酬3択化・修練の間(スキル習得を分離)・契約とクラスの相性調整</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
@@ -2170,7 +2206,8 @@ export default function HackRoguelike() {
           setPendingDiff(d.key);
           setRunModKey(pick(MODIFIERS).key);
           const normals = BLESSINGS.filter(b => !b.keystone && (!b.locked || metaOwned(b.locked) > 0)).sort(() => Math.random() - 0.5).slice(0, 2);
-          const ks = pick(BLESSINGS.filter(b => b.keystone));
+          const banned = KEYSTONE_EXCLUDE[pendingClass || "warrior"] || []; // クラスの根幹と矛盾する契約は候補に出さない
+          const ks = pick(BLESSINGS.filter(b => b.keystone && !banned.includes(b.key)));
           setBlessingChoices([...normals.map(b => b.key), ks.key]);
           setScene("blessing");
         }}
@@ -2271,21 +2308,61 @@ export default function HackRoguelike() {
     </div>
   );
 
-  // ===== レリック獲得 =====
-  if (scene === "relicGet" && relicGot) return (
-    <div style={{ ...wrap, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center" }}>
+  // ===== レリック選択(ボス/エリート報酬。未所持から3択) =====
+  if (scene === "relicChoice" && relicChoices.length > 0) return (
+    <div style={wrap}>
       {statusOverlay}{statusFab}
-      <p style={{ color: "#c084fc", fontSize: 13, fontWeight: 700, marginBottom: 8 }}>✨ レリックを発見！</p>
-      <div style={{ fontSize: 60, marginBottom: 8 }}>{relicGot.icon}</div>
-      <h1 style={{ fontSize: 22, fontWeight: 800, color: "#c084fc", margin: "0 0 6px" }}>{relicGot.name}</h1>
-      <div style={{ background: "#161210", border: "1px solid #c084fc", boxShadow: "0 0 18px rgba(192,132,252,0.35)", borderRadius: 10, padding: 16, marginBottom: 10, width: "100%" }}>
-        <div style={{ fontSize: 14, color: "#e7e5e4" }}>{relicGot.desc}</div>
-      </div>
-      <p style={{ color: "#78716c", fontSize: 12, marginBottom: 20 }}>レリックは永続効果(所持枠 {(player.relics || []).length}/{RELIC_CAP})</p>
-      <button onClick={() => { const e = pendingKill; setRelicGot(null); setPendingKill(null); progressAfterKill(player, e); }}
-        style={{ ...btnStyle(false), flex: "none", padding: "14px 40px", fontSize: 16 }}>受け取る</button>
+      <p style={{ color: "#c084fc", fontSize: 13, fontWeight: 700, textAlign: "center", marginBottom: 4 }}>✨ レリックを発見！</p>
+      <p style={{ color: "#a8a29e", fontSize: 12, textAlign: "center", marginBottom: 14 }}>1つ選んで持ち帰る(永続効果・所持枠 {(player.relics || []).length}/{RELIC_CAP})</p>
+      {relicChoices.map(rk => {
+        const r = RELIC_MAP[rk];
+        return (
+          <button key={rk} onClick={() => chooseRelic(rk)}
+            style={{ display: "block", width: "100%", textAlign: "left", background: "#161210", border: "1px solid #c084fc", boxShadow: "0 0 14px rgba(192,132,252,0.25)", borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer", color: "#e7e5e4", fontFamily: "inherit" }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: "#c084fc" }}>{r.icon} {r.name}</div>
+            <div style={{ fontSize: 13, color: "#a8a29e" }}>{r.desc}</div>
+          </button>
+        );
+      })}
+      <button onClick={declineRelicChoice} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 6 }}>どれも取らずに進む</button>
     </div>
   );
+
+  // ===== 修練の間(スキル習得の3択) =====
+  if (scene === "dojo") {
+    const known = player.knownSkills || player.skills;
+    const learnSkill = (k) => {
+      setSkillChoices([]);
+      setPlayer(p => {
+        const nk = [...(p.knownSkills || p.skills), k];
+        const eq = p.skills.length < 3 ? [...p.skills, k] : p.skills;
+        return { ...p, knownSkills: nk, skills: eq };
+      });
+      SFX.levelup();
+      addLog(`${floor}F:📖 修練の間で「${SKILLS[k].icon}${SKILLS[k].name}」を習得した${player.skills.length >= 3 ? "(装備枠満杯のため習得のみ。ツリー画面で入れ替え可)" : ""}`, "gold");
+      nextFloor();
+    };
+    return (
+      <div style={wrap}>
+        {statusOverlay}{statusFab}
+        <h2 style={{ color: "#fbbf24", textAlign: "center", fontSize: 20, fontWeight: 800 }}>📖 {floor}F — 修練の間</h2>
+        <p style={{ textAlign: "center", color: "#a8a29e", fontSize: 13, marginBottom: 4 }}>老師範が技を見せてくれる。学ぶのは1つだけだ</p>
+        <p style={{ textAlign: "center", color: "#78716c", fontSize: 12, marginBottom: 14 }}>習得枠 {known.length}/{SKILL_CAP}・スキル装備枠 {player.skills.length}/3</p>
+        {skillChoices.map(k => {
+          const s = SKILLS[k];
+          return (
+            <button key={k} onClick={() => learnSkill(k)}
+              style={{ display: "block", width: "100%", textAlign: "left", background: "#161210", border: "1px solid #b45309", borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer", color: "#e7e5e4", fontFamily: "inherit" }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "#fbbf24" }}>{s.icon} {s.name} <span style={{ color: "#78716c", fontWeight: 400, fontSize: 12 }}>CD{s.cd}</span></div>
+              <div style={{ fontSize: 13, color: "#a8a29e" }}>{s.desc}</div>
+            </button>
+          );
+        })}
+        <button onClick={() => { setSkillChoices([]); addLog(`${floor}F:修練の間を後にした`, "info"); nextFloor(); }}
+          style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 6 }}>何も学ばずに進む</button>
+      </div>
+    );
+  }
 
   // ===== レリック入れ替え(所持上限に達している場合) =====
   if (scene === "relicSwap" && relicGot) return (

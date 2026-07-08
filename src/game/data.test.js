@@ -2,7 +2,7 @@
 // 新しい敵・祝福・ゾーン等を追加した際の「参照切れ」(存在しないギミック名・スキル名を指すミス)を機械的に検出する。
 import { describe, it, expect } from "vitest";
 import {
-  RARITIES, DIFFICULTIES, BLESSINGS, ORIGINS, MODIFIERS, getMod,
+  RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, getMod,
   ASCENSIONS, ASCENSION_MAP, computeAscensionFx,
   ZONES, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS,
   META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS,
@@ -90,6 +90,16 @@ describe("参照の整合性", () => {
   });
   it("エリート特性のキー一覧が定義と一致する", () => {
     expect(ELITE_TRAIT_KEYS.sort()).toEqual(Object.keys(ELITE_TRAITS).sort());
+  });
+  it("契約の除外テーブルが実在するクラス・契約を指している", () => {
+    const ksKeys = new Set(BLESSINGS.filter(b => b.keystone).map(b => b.key));
+    for (const [cls, banned] of Object.entries(KEYSTONE_EXCLUDE)) {
+      expect(CLASSES[cls], `除外テーブルのクラス ${cls}`).toBeDefined();
+      for (const k of banned) expect(ksKeys.has(k), `${cls} の除外契約 ${k}`).toBe(true);
+      // 除外してもまだ契約候補が残ること(3択の枠が空にならない)
+      expect(BLESSINGS.filter(b => b.keystone && !banned.includes(b.key)).length).toBeGreaterThan(0);
+    }
+    for (const cls of Object.keys(CLASSES)) expect(KEYSTONE_EXCLUDE[cls], `クラス ${cls} の除外定義`).toBeDefined();
   });
   it("AFFIX_POOLの全キーに表示名(STAT_LABELS)がある", () => {
     for (const a of AFFIX_POOL) expect(STAT_LABELS[a.key], `アフィックス ${a.key} の表示名`).toBeDefined();
