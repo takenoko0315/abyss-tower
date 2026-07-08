@@ -34,9 +34,10 @@ React + Vite製のローグライクRPG。UIテキストは日本語。
 - `abyss.gold(n)` — ゴールド+n(既定500)
 - `abyss.souls(n)` — 深淵の魂+n(既定500)
 - `abyss.heal()` — HP全回復
-- `abyss.weaken()` — 現在の敵のHPを1に
+- `abyss.oneHp()` — 現在の敵のHPを1に(状態異常の「衰弱」とは無関係、旧名`weaken()`)
 - `abyss.jump(f)` — f階に移動(ボス・深層のテストに)
 - `abyss.best(n)` — 最高到達階を書き換え(深淵の彼方の解禁条件=20階クリアの確認に)
+- `abyss.status(type, turns, dmg)` — 現在の敵に状態異常を直接付与(poison/burn/bleed/freeze/stun/weakenのテストに。weakenのdmgは減衰%、poison/bleedは継続ダメージ量)
 
 ## ブラウザテストの作法
 

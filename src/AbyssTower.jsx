@@ -34,8 +34,10 @@ function applyStatus(e, type, turns, dmg = 0) {
   if (ACTIVE_MOD.statusTurns) turns += ACTIVE_MOD.statusTurns; // 毒気の霧:持続+1
   if (e.trait === "resist") turns = Math.max(1, Math.ceil(turns / 2)); // 耐性持ちは効果時間半分
   const cur = e.status[type];
-  if (type === "poison") {
-    e.status.poison = { turns: Math.max(cur?.turns || 0, turns), dmg: (cur?.dmg || 0) + dmg }; // 毒はダメージ蓄積
+  if (type === "poison" || type === "bleed") {
+    e.status[type] = { turns: Math.max(cur?.turns || 0, turns), dmg: (cur?.dmg || 0) + dmg }; // 毒・出血はダメージ蓄積
+  } else if (type === "weaken") {
+    e.status.weaken = { turns: Math.max(cur?.turns || 0, turns), dmg: Math.max(cur?.dmg || 0, dmg) }; // 衰弱は弱い方で上書きしない(dmgに減衰率%を保持)
   } else {
     e.status[type] = { turns: Math.max(cur?.turns || 0, turns), dmg };
   }
@@ -212,6 +214,8 @@ function totalStats(player, equip) {
   if (ACTIVE_ZONE.playerDouble) t.double += ACTIVE_ZONE.playerDouble;
   if (ACTIVE_ZONE.playerThorns) t.thorns += ACTIVE_ZONE.playerThorns;
   if (ACTIVE_ZONE.playerDodge) t.dodge = (t.dodge || 0) + ACTIVE_ZONE.playerDodge; // 風走りの高台:回避
+  if (ACTIVE_ZONE.playerBleedPower) t.bleedPower = (t.bleedPower || 0) + ACTIVE_ZONE.playerBleedPower; // 紅の回廊:出血威力
+  if (ACTIVE_ZONE.playerWeakenPower) t.weakenPower = (t.weakenPower || 0) + ACTIVE_ZONE.playerWeakenPower; // 枷の谷:衰弱威力
 
   if (ACTIVE_ZONE.randomBuff) for (const [k, v] of Object.entries(ACTIVE_ZONE.randomBuff)) t[k] = (t[k] || 0) + v; // 夢幻の回廊:気まぐれな祝福
   for (const slot of SLOT_KEYS) {
@@ -363,9 +367,10 @@ export default function HackRoguelike() {
       gold: (n = 500) => setPlayer(p => ({ ...p, gold: p.gold + n })),
       souls: (n = 500) => setMeta(m => { const nm = { ...m, souls: m.souls + n }; metaStorageSave(nm); return nm; }),
       heal: () => setPlayer(p => ({ ...p, hp: totalStats(p, equip).maxHp })),
-      weaken: () => setEnemy(e => e ? { ...e, hp: 1 } : e),
+      oneHp: () => setEnemy(e => e ? { ...e, hp: 1 } : e), // 旧weaken()。名称衝突を避けるため改名(衰弱=状態異常のweakenと紛らわしいため)
       jump: (f) => { setFloor(f); enterFloor(f); },
       best: (n = 20) => setMeta(m => { const nm = { ...m, best: n }; metaStorageSave(nm); return nm; }),
+      status: (type, turns = 3, dmg = 10) => setEnemy(e => e ? { ...e, status: { ...(e.status || {}), [type]: { turns, dmg } } } : e), // 敵に状態異常を直接付与(poison/burn/bleed/freeze/stun/weaken)
     };
   });
   const toggleMute = () => {
@@ -561,12 +566,17 @@ export default function HackRoguelike() {
       e.hp = Math.min(e.maxHp, e.hp + heal);
       addLog(`💚 ${e.name}が再生でHP+${heal}`, "info");
     }
-    // 状態異常の継続ダメージ(毒・炎上)
+    // 状態異常の継続ダメージ(毒・出血・炎上)
     if (e.status) {
       if (e.status.poison?.turns > 0) {
         e.hp -= e.status.poison.dmg;
         addLog(`🟣 ${e.name}は毒で${e.status.poison.dmg}ダメージ`, "dmg");
         e.status.poison.turns--;
+      }
+      if (e.status.bleed?.turns > 0) {
+        e.hp -= e.status.bleed.dmg;
+        addLog(`🩸 ${e.name}は出血で${e.status.bleed.dmg}ダメージ`, "dmg");
+        e.status.bleed.turns--;
       }
       if (e.status.burn?.turns > 0) {
         let rate = hasNode(player, "m1") ? 0.11 : 0.06; // 業火(ツリー)
@@ -584,6 +594,7 @@ export default function HackRoguelike() {
     let incap = false;
     if (e.status?.freeze?.turns > 0) { incap = true; e.status.freeze.turns--; }
     if (e.status?.stun?.turns > 0) { incap = true; e.status.stun.turns--; }
+    if (e.status?.weaken?.turns > 0) e.status.weaken.turns--; // 衰弱は行動不能にしない(攻撃力が落ちたまま行動する)
     if (incap) {
       addLog(`${e.name}は動けない！(${INTENTS[e.intent].icon}${INTENTS[e.intent].name}は持ち越し)`, "info");
       return p;
@@ -652,6 +663,7 @@ export default function HackRoguelike() {
         if (e.gimmick === "fragile") raw *= 1.5; // 硝子細工:与ダメ+50%(代わりに被ダメも+50%)
         if (e.gimmick === "burrow" && e.burrowedNext) { raw *= 1.6; e.burrowedNext = false; } // 潜伏明けの強化された一撃
         if (stats.poisonWeaken > 0 && e.status?.poison?.turns > 0) raw *= 0.8; // 疫病医:毒の敵は攻撃-20%
+        if (e.status?.weaken?.turns > 0) raw *= 1 - e.status.weaken.dmg / 100; // 衰弱:攻撃力低下
         let effDef = stats.def + (e.status?.freeze?.turns > 0 ? Math.round(stats.def * (stats.freezeDefBonus || 0) / 100) : 0); // 氷の鎧
         let dmg = Math.max(1, Math.round(raw - effDef + rand(-1, 2)));
         if (act === "heavy" && stats.heavyResist > 0) dmg = Math.max(1, Math.round(dmg * 0.5)); // 隕鉄の兜
@@ -1614,6 +1626,11 @@ export default function HackRoguelike() {
           applyStatus(e, "poison", 2, pd);
           addLog(`🗡️ 会心の一撃が毒を刻んだ`, "dmg");
         }
+        if (stats.critBleed > 0 && e.hp > 0) { // 会心の傷跡
+          const bd = Math.max(1, Math.round(stats.atk * 0.25 * (1 + (stats.bleedPower || 0) / 100)));
+          applyStatus(e, "bleed", 3, bd);
+          addLog(`🗡️ 会心の一撃が傷跡を刻んだ`, "dmg");
+        }
         if (stats.critGauge > 0) { // 闘気の共鳴:クリ命中でクラスゲージ+1
           if (player.cls === "warrior") { const cap = player.variant === "b" ? 7 : 5; if ((p.fury || 0) < cap) { p.fury = Math.min(cap, (p.fury || 0) + 1); addLog(`🔥 闘気の共鳴で闘志+1(${p.fury}/${cap})`, "info"); } }
           else if (player.cls === "assassin") { p.combo = Math.min(8, (p.combo || 0) + 1); addLog(`⚔️ 闘気の共鳴でコンボ+1(×${p.combo})`, "info"); }
@@ -1736,11 +1753,23 @@ export default function HackRoguelike() {
       applyStatus(e, "burn", 2);
       addLog(`🔥 刃の残り火が${e.name}を炙る…`, "dmg");
     }
+    // ユニーク: 深手(攻撃するたび出血)
+    if (stats.alwaysBleed > 0 && e.hp > 0) {
+      let bd = Math.max(1, Math.round(stats.atk * 0.25 * (1 + (stats.bleedPower || 0) / 100)));
+      applyStatus(e, "bleed", 3, bd);
+      addLog(`🩸 刃が${e.name}に深手を刻む…`, "dmg");
+    }
+    // ユニーク: 呪縛(攻撃するたび衰弱)
+    if (stats.alwaysWeaken > 0 && e.hp > 0) {
+      applyStatus(e, "weaken", 2, 15 + (stats.weakenPower || 0));
+      addLog(`🔻 ${e.name}の力が抜けていく…`, "dmg");
+    }
     // スキル固有の状態異常付与
     if (spec.applyStatus && e.hp > 0) {
       const s = spec.applyStatus;
-      let dmg = s.dmgRatio ? Math.max(1, Math.round(stats.atk * s.dmgRatio * (1 + (stats.poisonPower || 0) / 100))) : 0;
-      if (s.type === "poison" && hasRelic(player, "poison")) dmg = Math.round(dmg * 1.6); // 猛毒の指輪
+      const powerKey = s.type + "Power"; // poisonPower / bleedPower など、種類に応じた威力アフィックスを参照
+      let dmg = s.dmgRatio ? Math.max(1, Math.round(stats.atk * s.dmgRatio * (1 + (stats[powerKey] || 0) / 100))) : 0;
+      if ((s.type === "poison" || s.type === "bleed") && hasRelic(player, s.type)) dmg = Math.round(dmg * 1.6); // 猛毒の指輪・血の指輪
       let turns = s.type === "freeze" && hasNode(player, "m2") ? s.turns + 1 : s.turns;   // 絶対零度
       if (s.type === "freeze" && hasRelic(player, "freeze")) turns += 1;                  // 氷河の核
       applyStatus(e, s.type, turns, dmg);
@@ -1818,6 +1847,11 @@ export default function HackRoguelike() {
     if (freezeCh > 0 && Math.random() * 100 < freezeCh) {
       applyStatus(e, "freeze", 1);
       addLog(`❄️ 冷気が吹き荒れ、${e.name}が凍りついた！`, "dmg");
+    }
+    // 防御時衰弱(枷)
+    if (stats.onDefendWeaken > 0) {
+      applyStatus(e, "weaken", 2, 15 + (stats.weakenPower || 0));
+      addLog(`⛓️ 構えが${e.name}の力を封じた…`, "dmg");
     }
     if (e.guardTurns > 0) e.guardTurns--;
     // 棘ビルド:防御は反撃も兼ねる。敵が何をしてきたかに関わらず必ず棘が発動する
@@ -2085,7 +2119,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.40 — 炎上ビルド強化・最終ボス3択化・図鑑コンプ報酬</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.41 — 状態異常「出血」「衰弱」を追加</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
@@ -2820,7 +2854,8 @@ export default function HackRoguelike() {
             const it = INTENTS[enemy.intent];
             const hitsEst = enemy.intent === "flurry" ? 3 : enemy.trait === "swift" && enemy.intent === "attack" ? 2 : 1;
             const gimmickMult = (enemy.gimmick === "fragile" ? 1.5 : 1) * (enemy.gimmick === "burrow" && enemy.burrowedNext ? 1.6 : 1);
-            const estDmg = Math.max(1, Math.round(enemy.atk * enemyAtkMult(enemy) * (it.mult || 1) * gimmickMult - stats.def)) * hitsEst;
+            const weakenMult = enemy.status?.weaken?.turns > 0 ? 1 - enemy.status.weaken.dmg / 100 : 1;
+            const estDmg = Math.max(1, Math.round(enemy.atk * enemyAtkMult(enemy) * (it.mult || 1) * gimmickMult * weakenMult - stats.def)) * hitsEst;
             const arcaneHeavy = enemy.gimmick === "arcane" && enemy.intent === "heavy";
             const estDef = Math.max(1, Math.round(estDmg * (arcaneHeavy ? 0.7 : 0.4)));
             const isThreat = ["attack", "heavy", "venom", "flurry"].includes(enemy.intent);
@@ -2840,7 +2875,7 @@ export default function HackRoguelike() {
             <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 6, flexWrap: "wrap" }}>
               {Object.entries(enemy.status).filter(([, v]) => v.turns > 0).map(([k, v]) => (
                 <span key={k} style={{ fontSize: 11, color: STATUS[k].color, border: `1px solid ${STATUS[k].color}`, borderRadius: 4, padding: "1px 6px" }}>
-                  {STATUS[k].icon}{STATUS[k].name}{v.turns}T{k === "poison" ? `(${v.dmg})` : ""}
+                  {STATUS[k].icon}{STATUS[k].name}{v.turns}T{k === "poison" || k === "bleed" ? `(${v.dmg})` : k === "weaken" ? `(-${v.dmg}%)` : ""}
                 </span>
               ))}
             </div>

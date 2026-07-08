@@ -7,7 +7,7 @@ import {
   ZONES, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS,
   META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS,
   CURSES, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, FINAL_BOSSES, ALL_BOSSES,
-  PERKS, SKILLS, CLASSES, TREES, RELICS, RELIC_MAP, STAT_LABELS,
+  PERKS, SKILLS, CLASSES, TREES, RELICS, RELIC_MAP, STAT_LABELS, STATUS,
 } from "./data.js";
 
 const keysOf = (arr) => arr.map(x => x.key);
@@ -107,6 +107,11 @@ describe("参照の整合性", () => {
   });
   it("AFFIX_POOLの全キーに表示名(STAT_LABELS)がある", () => {
     for (const a of AFFIX_POOL) expect(STAT_LABELS[a.key], `アフィックス ${a.key} の表示名`).toBeDefined();
+  });
+  it("スキルのapplyStatus.typeがSTATUSに実在する", () => {
+    for (const [k, s] of Object.entries(SKILLS)) {
+      if (s.spec.applyStatus) expect(STATUS[s.spec.applyStatus.type], `${k} が付与する状態異常 ${s.spec.applyStatus.type}`).toBeDefined();
+    }
   });
 });
 
