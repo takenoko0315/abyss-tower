@@ -6,7 +6,7 @@ import {
   ASCENSIONS, ASCENSION_MAP, computeAscensionFx,
   ZONES, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS,
   META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS,
-  CURSES, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, ALL_BOSSES,
+  CURSES, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, FINAL_BOSSES, ALL_BOSSES,
   PERKS, SKILLS, CLASSES, TREES, RELICS, RELIC_MAP, STAT_LABELS,
 } from "./data.js";
 
@@ -44,6 +44,10 @@ describe("参照の整合性", () => {
     for (const e of ENEMIES) expect(GIMMICKS[e.gimmick], `${e.name} のギミック ${e.gimmick}`).toBeDefined();
     for (const pool of BOSS_POOLS) for (const b of pool) {
       if (b.gimmick) expect(GIMMICKS[b.gimmick], `ボス ${b.name} のギミック ${b.gimmick}`).toBeDefined();
+    }
+    for (const b of FINAL_BOSSES) {
+      if (b.gimmick) expect(GIMMICKS[b.gimmick], `最終ボス ${b.name} のギミック ${b.gimmick}`).toBeDefined();
+      expect(Array.isArray(b.pattern) && b.pattern.length > 0, `最終ボス ${b.name} の行動パターン`).toBe(true);
     }
   });
   it("祝福のlearnSkill・lockedが実在する", () => {

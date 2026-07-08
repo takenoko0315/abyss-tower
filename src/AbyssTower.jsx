@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import {
-  RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, ALL_BOSSES, PERKS, SKILLS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, FINAL_PATTERN, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
+  RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, FINAL_BOSSES, ALL_BOSSES, PERKS, SKILLS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
 } from "./game/data.js";
 import { SFX, setSfxMuted } from "./game/sfx.js";
 import { metaStorageLoad, metaStorageSave } from "./game/storage.js";
@@ -120,7 +120,7 @@ function genEnemy(floor, elite = false, traitKey = null) {
   const isFinal = floor === FINAL_FLOOR;
   const endless = floor > FINAL_FLOOR;
   let base;
-  if (isFinal) base = { name: "深淵の魔王", icon: "😈" };
+  if (isFinal) base = pick(FINAL_BOSSES);
   else if (endless && isBoss) base = pick([{ name: "虚無の使徒", icon: "🌑" }, { name: "終焉竜", icon: "🐲" }, { name: "深淵の王", icon: "👁️" }]);
   else if (isBoss) base = pick(BOSS_POOLS[Math.min(Math.floor(floor / 5) - 1, BOSS_POOLS.length - 1)]);
   else base = pick(ACTIVE_BESTIARY);
@@ -164,7 +164,7 @@ function genEnemy(floor, elite = false, traitKey = null) {
     PENDING_DEATHCURSE = false;
   }
   // ボスは固有の周期パターンで行動する(覚えれば完全に読める)
-  if (isFinal) { e.pattern = FINAL_PATTERN; e.patternIdx = 0; }
+  if (isFinal) { e.pattern = base.pattern; e.patternIdx = 0; }
   else if (isBoss) { e.pattern = base.pattern || BOSS_PATTERNS[(Math.floor(floor / 5) - 1 + BOSS_PATTERNS.length) % BOSS_PATTERNS.length]; e.patternIdx = 0; }
   e.intent = rollIntent(e);
   return e;
@@ -331,11 +331,11 @@ export default function HackRoguelike() {
   const [best, setBest] = useState(0);
   const [pendingAscension, setPendingAscension] = useState([]);
   // メタ進行:魂と恒久アンロック(window.storageに永続保存)
-  const [meta, setMeta] = useState({ souls: 0, buys: {}, best: 0, codex: { enemies: [], relics: [], abilities: [] } });
+  const [meta, setMeta] = useState({ souls: 0, buys: {}, best: 0, codex: { enemies: [], relics: [], abilities: [] }, codexRewards: [] });
   const [soulsGained, setSoulsGained] = useState(0);
   const [victoryAwarded, setVictoryAwarded] = useState(false);
   const [muted, setMuted] = useState(false);
-  useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); } }); }, []);
+  useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, codexRewards: [], ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); } }); }, []);
   useEffect(() => { setSfxMuted(muted); }, [muted]);
   // 図鑑(コレクション):敵・レリック・固有能力を発見済みとして永続記録する
   const recordCodex = useCallback((category, keys) => {
@@ -403,6 +403,28 @@ export default function HackRoguelike() {
   const metaOwned = (key) => meta.buys[key] || 0;
 
   const addLog = useCallback((msg, c = "info") => setLog(l => [...l.slice(-7), { t: msg, c }]), []);
+
+  // 図鑑コンプリート報酬:各図鑑を100%埋めると1回だけ魂を獲得する
+  useEffect(() => {
+    const known = new Set(meta.codex?.enemies || []);
+    const claimed = new Set(meta.codexRewards || []);
+    const categories = [
+      { key: "enemies", label: "敵図鑑", souls: 100, known: ENEMIES.filter(e => known.has(e.name)).length, total: ENEMIES.length },
+      { key: "bosses", label: "ボス図鑑", souls: 100, known: ALL_BOSSES.filter(b => known.has(b.name)).length, total: ALL_BOSSES.length },
+      { key: "relics", label: "レリック図鑑", souls: 150, known: (meta.codex?.relics || []).length, total: RELICS.length },
+      { key: "abilities", label: "固有能力図鑑", souls: 150, known: (meta.codex?.abilities || []).length, total: ABILITIES.length },
+    ];
+    for (const c of categories) {
+      if (claimed.has(c.key) || c.total === 0 || c.known < c.total) continue;
+      setMeta(m => {
+        if ((m.codexRewards || []).includes(c.key)) return m;
+        const nm = { ...m, souls: m.souls + c.souls, codexRewards: [...(m.codexRewards || []), c.key] };
+        metaStorageSave(nm);
+        return nm;
+      });
+      addLog(`📖 ${c.label}コンプリート！魂+${c.souls}`, "gold");
+    }
+  }, [meta.codex, meta.codexRewards, addLog]);
 
   const startRun = (clsKey = "warrior", diffKey = "normal", blessingKey = null, modKey = "none", variantKey = "a", originKey = null, ascensionKeys = []) => {
     ACTIVE_DIFF = DIFFICULTIES[diffKey];
@@ -550,6 +572,7 @@ export default function HackRoguelike() {
         let rate = hasNode(player, "m1") ? 0.11 : 0.06; // 業火(ツリー)
         if (hasRelic(player, "burn")) rate += 0.04;      // 業火の宝珠(レリック)
         rate += ACTIVE_ZONE.burnBoost || 0;              // 灼けた荒野(ゾーン)
+        rate *= 1 + (stats.burnPower || 0) / 100;        // 炎威力(アフィックス・出自・レリック)
         const d = Math.max(1, Math.round(e.maxHp * rate));
         e.hp -= d;
         addLog(`🔥 ${e.name}は炎上で${d}ダメージ`, "dmg");
@@ -1708,6 +1731,11 @@ export default function HackRoguelike() {
       applyStatus(e, "poison", 2, pd);
       addLog(`🟣 大鎌の呪毒が${e.name}を蝕む…`, "dmg");
     }
+    // ユニーク: 常燃(攻撃するたび炎上)
+    if (stats.alwaysBurn > 0 && e.hp > 0) {
+      applyStatus(e, "burn", 2);
+      addLog(`🔥 刃の残り火が${e.name}を炙る…`, "dmg");
+    }
     // スキル固有の状態異常付与
     if (spec.applyStatus && e.hp > 0) {
       const s = spec.applyStatus;
@@ -2057,7 +2085,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.39 — レリック報酬3択化・修練の間(スキル習得を分離)・契約とクラスの相性調整</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.40 — 炎上ビルド強化・最終ボス3択化・図鑑コンプ報酬</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
@@ -2124,12 +2152,22 @@ export default function HackRoguelike() {
     const knownEnemies = new Set(meta.codex?.enemies || []);
     const knownRelics = new Set(meta.codex?.relics || []);
     const knownAbilities = new Set(meta.codex?.abilities || []);
-    const Section = ({ title, color, total, known, children }) => (
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ color, fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{title} <span style={{ color: "#78716c", fontWeight: 400, fontSize: 12 }}>({known}/{total})</span></div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{children}</div>
-      </div>
-    );
+    const claimedRewards = new Set(meta.codexRewards || []);
+    const REWARD_SOULS = { enemies: 100, bosses: 100, relics: 150, abilities: 150 };
+    const Section = ({ rewardKey, title, color, total, known, children }) => {
+      const claimed = claimedRewards.has(rewardKey);
+      return (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ color, fontWeight: 700, fontSize: 15, marginBottom: 8 }}>
+            {title} <span style={{ color: "#78716c", fontWeight: 400, fontSize: 12 }}>({known}/{total})</span>
+            {claimed
+              ? <span style={{ color: "#4ade80", fontSize: 11, fontWeight: 400 }}> ✓コンプリート報酬 魂+{REWARD_SOULS[rewardKey]} 獲得済み</span>
+              : <span style={{ color: "#57534e", fontSize: 11, fontWeight: 400 }}> 🎁コンプリートで魂+{REWARD_SOULS[rewardKey]}</span>}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{children}</div>
+        </div>
+      );
+    };
     const Chip = ({ found, icon, name, desc, color }) => (
       <div style={{ background: "#161210", border: `1px solid ${found ? color : "#292524"}`, borderRadius: 8, padding: "6px 10px", fontSize: 11, color: found ? "#e7e5e4" : "#44403c", minWidth: 120 }}>
         <div style={{ fontWeight: 700 }}>{found ? icon : "？"} {found ? name : "未発見"}</div>
@@ -2140,16 +2178,16 @@ export default function HackRoguelike() {
       <div style={wrap}>
         <h2 style={{ color: "#5eead4", textAlign: "center", fontSize: 20, fontWeight: 800 }}>📖 図鑑</h2>
         <p style={{ textAlign: "center", color: "#a8a29e", fontSize: 12, marginBottom: 16 }}>これまでのランで出会った敵・手にしたレリック・見つけた固有能力の記録</p>
-        <Section title="👹 敵図鑑" color="#f87171" total={ENEMIES.length} known={ENEMIES.filter(e => knownEnemies.has(e.name)).length}>
+        <Section rewardKey="enemies" title="👹 敵図鑑" color="#f87171" total={ENEMIES.length} known={ENEMIES.filter(e => knownEnemies.has(e.name)).length}>
           {ENEMIES.map(e => <Chip key={e.name} found={knownEnemies.has(e.name)} icon={e.icon} name={e.name} desc={GIMMICKS[e.gimmick]?.name} color="#f87171" />)}
         </Section>
-        <Section title="👑 ボス図鑑" color="#fbbf24" total={ALL_BOSSES.length} known={ALL_BOSSES.filter(e => knownEnemies.has(e.name)).length}>
+        <Section rewardKey="bosses" title="👑 ボス図鑑" color="#fbbf24" total={ALL_BOSSES.length} known={ALL_BOSSES.filter(e => knownEnemies.has(e.name)).length}>
           {ALL_BOSSES.map(e => <Chip key={e.name} found={knownEnemies.has(e.name)} icon={e.icon} name={e.name} color="#fbbf24" />)}
         </Section>
-        <Section title="💠 レリック図鑑" color="#c084fc" total={RELICS.length} known={RELICS.filter(r => knownRelics.has(r.key)).length}>
+        <Section rewardKey="relics" title="💠 レリック図鑑" color="#c084fc" total={RELICS.length} known={RELICS.filter(r => knownRelics.has(r.key)).length}>
           {RELICS.map(r => <Chip key={r.key} found={knownRelics.has(r.key)} icon={r.icon} name={r.name} desc={r.desc} color="#c084fc" />)}
         </Section>
-        <Section title="✦ 固有能力図鑑" color="#f97316" total={ABILITIES.length} known={ABILITIES.filter(a => knownAbilities.has(a.key)).length}>
+        <Section rewardKey="abilities" title="✦ 固有能力図鑑" color="#f97316" total={ABILITIES.length} known={ABILITIES.filter(a => knownAbilities.has(a.key)).length}>
           {ABILITIES.map(a => <Chip key={a.key} found={knownAbilities.has(a.key)} icon={a.name[0]} name={a.name} desc={a.desc} color="#f97316" />)}
         </Section>
         <button onClick={() => setScene("title")} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 6 }}>タイトルへ戻る</button>
@@ -2295,7 +2333,7 @@ export default function HackRoguelike() {
     <div style={{ ...wrap, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center" }}>
       <div style={{ fontSize: 56, marginBottom: 8 }}>👑</div>
       <h1 style={{ fontSize: 26, fontWeight: 800, color: "#fbbf24", margin: "0 0 4px" }}>制 覇 ！</h1>
-      <p style={{ color: "#a8a29e", fontSize: 14, marginBottom: 20 }}>深淵の魔王を打ち倒し、塔の頂きに到達した</p>
+      <p style={{ color: "#a8a29e", fontSize: 14, marginBottom: 20 }}>{enemy?.icon || "😈"}{enemy?.name || "深淵の魔王"}を打ち倒し、塔の頂きに到達した</p>
       <div style={{ background: "#161210", border: "1px solid #b45309", borderRadius: 10, padding: 16, marginBottom: 24, width: "100%" }}>
         <div style={{ fontSize: 14, marginBottom: 6 }}>クリアタイム:<span style={{ color: "#fbbf24", fontWeight: 700 }}> 20F 制覇</span>　<span style={{ color: DIFFICULTIES[player.diff || "normal"].color }}>{DIFFICULTIES[player.diff || "normal"].icon}{DIFFICULTIES[player.diff || "normal"].name}</span></div>
         <div style={{ fontSize: 14, marginBottom: 6, color: "#c4b5fd" }}>獲得した魂:<span style={{ fontWeight: 700 }}> +{soulsGained} 👻</span></div>
