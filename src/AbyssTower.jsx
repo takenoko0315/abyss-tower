@@ -541,6 +541,10 @@ export default function HackRoguelike() {
   };
 
   const enemyTurn = (p, e, skipThorns = false) => {
+    // 捌きの構え:このターン限りの予約。使うかどうかに関わらずこの呼び出しで消費される
+    const parryReady = !!p.parryReady;
+    const parryMult = p.parryMult || 1;
+    if (p.parryReady) p = { ...p, parryReady: false };
     // 血染めの杯(契約):毎ターン最大HPの3%を失う
     if (stats.drainPerTurn > 0 && p.hp > 0) {
       const dr = Math.max(1, Math.round(stats.maxHp * stats.drainPerTurn / 100));
@@ -649,6 +653,14 @@ export default function HackRoguelike() {
         addLog(`🌩️ 雷鳴が${e.name}を加速させる！(連撃)`, "hurt");
       }
       for (let i = 0; i < attackHits; i++) {
+        // 捌きの構え:最初の1撃を完全に見切り、確定反撃を返す(2撃目以降は通常通り)
+        if (i === 0 && parryReady) {
+          const counterDmg = Math.max(1, Math.round(stats.atk * parryMult));
+          e.hp -= counterDmg;
+          addLog(`🥋 見切った！${e.name}の攻撃を完全に躱し、${counterDmg}ダメージの反撃！`, "dmg");
+          if (e.hp <= 0) break;
+          continue;
+        }
         // ユニーク: 風走りの靴(完全回避)
         if (stats.dodge > 0 && Math.random() * 100 < stats.dodge) {
           addLog(`💨 ${e.name}の攻撃をかわした！`, "info");
@@ -1827,7 +1839,50 @@ export default function HackRoguelike() {
   const castSkill = (key) => {
     if ((cds[key] || 0) > 0 || player.petrified || stats.noSkill > 0) return;
     const s = SKILLS[key];
+    if (s.spec.kind) { castStanceSkill(key); return; } // 防御・カウンター・回復・障壁系(攻撃ロジックを通らない)
     performAttack(s.spec, `${s.icon}${s.name}`, key);
+  };
+
+  // 防御・カウンター・回復・障壁系スキルの解決(performAttackの被ダメージループを経由しない別系統)
+  const castStanceSkill = (key) => {
+    const s = SKILLS[key];
+    const spec = s.spec;
+    let p = { ...player, petrified: false };
+    let e = { ...enemy, status: enemy.status ? { ...enemy.status } : undefined };
+    SFX.skill();
+    if (spec.kind === "guard") {
+      // 鉄壁の構え:防御(被ダメ-60%/-80%・次ターン与ダメ+15%)+ 確定反撃
+      p = { ...p, defending: true, defendedLast: true };
+      const counterDmg = Math.max(1, Math.round(stats.atk * spec.counterMult));
+      e.hp -= counterDmg;
+      addLog(`${s.icon}${s.name}！${e.name}に${counterDmg}ダメージの反撃(このターン被ダメ${stats.betterDefend > 0 ? "-80%" : "-60%"})`, "dmg");
+    } else if (spec.kind === "parry") {
+      p = { ...p, parryReady: true, parryMult: spec.counterMult };
+      addLog(`${s.icon}${s.name}！次の攻撃を見切る構えを取った`, "info");
+    } else if (spec.kind === "heal") {
+      const heal = Math.max(1, Math.round(stats.maxHp * spec.healPct * (1 - (p.healReduce || 0) / 100)));
+      p = { ...p, hp: Math.min(stats.maxHp, p.hp + heal) };
+      addLog(`${s.icon}${s.name}！HPが${heal}回復した`, "heal");
+    } else if (spec.kind === "shield") {
+      const shield = Math.round(stats.maxHp * spec.shieldPct);
+      p = { ...p, barrier: (p.barrier || 0) + shield };
+      addLog(`${s.icon}${s.name}！障壁+${shield}(現在${p.barrier})`, "heal");
+    }
+    tickCds(key);
+    if (e.hp <= 0) { setEnemy(e); afterKill(p, e); return; }
+    p = p.hp > 0 ? enemyTurn(p, e) : p;
+    if (p.hp <= 0) {
+      if ((p.hooks?.cheatDeath || 0) > 0 && !p.cheatDeathUsed) {
+        p = { ...p, hp: 1, cheatDeathUsed: true };
+        addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
+        SFX.levelup();
+      } else {
+        setEnemy(e); setPlayer(p); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return;
+      }
+    }
+    if (e.hp <= 0) { setEnemy(e); afterKill(p, e); return; }
+    setEnemy(e);
+    setPlayer(p);
   };
 
   // 防御:このターン受けるダメージ-60%。大技の予告に合わせて使うのが基本
@@ -2119,7 +2174,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.41 — 状態異常「出血」「衰弱」を追加</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.42 — 防御・カウンター系スキル4種を追加</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
@@ -2584,7 +2639,7 @@ export default function HackRoguelike() {
           <div style={{ color: "#c084fc", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🔮 スキル改造 — {skillModPrice} G</div>
           <div style={{ fontSize: 12, color: "#a8a29e", marginBottom: 8 }}>装備スキルにモッドを1つ刻める(上書き可)。改造したいスキルを選択:</div>
           <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-            {player.skills.map(k => {
+            {player.skills.filter(k => !SKILLS[k].spec.kind).map(k => {
               const cur = (player.skillMods || {})[k];
               const sel = forgeSkill === k;
               return (

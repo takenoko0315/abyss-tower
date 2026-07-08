@@ -425,6 +425,11 @@ export const SKILLS = {
   laceration: { name: "裂傷", icon: "🔪", cd: 3, desc: "1.3倍+出血を3ターン付与", spec: { mult: 1.3, hits: 1, applyStatus: { type: "bleed", turns: 3, dmgRatio: 0.35 } } },
   thunder: { name: "雷撃", icon: "🌩️", cd: 3, desc: "1.6倍+30%で気絶させる", locked: true, spec: { mult: 1.6, hits: 1, stunChance: 0.3 } },
   moonlight: { name: "月光斬", icon: "🌙", cd: 3, desc: "1.5倍。構え/大技予告中の敵には2.5倍", locked: true, spec: { mult: 1.5, hits: 1, punish: true } },
+  // ===== 防御・カウンター系(ダメージを与えない、または攻撃と異なる形でダメージを返すスキル) =====
+  ironguard: { name: "鉄壁の構え", icon: "🛡️", cd: 4, desc: "防御の構えを取り、攻撃力80%の反撃を即座に叩き込む", spec: { kind: "guard", counterMult: 0.8 } },
+  deflect: { name: "捌きの構え", icon: "🥋", cd: 4, desc: "次に受ける攻撃を完全に見切り、攻撃力130%の反撃を叩き込む(1ターン限定)", spec: { kind: "parry", counterMult: 1.3 } },
+  healchant: { name: "治癒の詠唱", icon: "💚", cd: 5, desc: "HPを最大HPの30%回復する", spec: { kind: "heal", healPct: 0.3 } },
+  barrierchant: { name: "障壁の詠唱", icon: "🔷", cd: 5, desc: "最大HPの25%分の障壁を張り、以後のダメージを肩代わりする", spec: { kind: "shield", shieldPct: 0.25 } },
 };
 
 // ===== 状態異常 =====

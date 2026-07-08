@@ -146,11 +146,17 @@ describe("数値の健全性", () => {
     // 未知のキーは無視される
     expect(computeAscensionFx(["存在しない"]).enemyHp).toBe(1);
   });
-  it("SKILLSのCDが1以上・倍率が正", () => {
+  it("SKILLSのCDが1以上・倍率が正(攻撃系)。防御/回復/障壁系は専用フィールドが正", () => {
     for (const [k, s] of Object.entries(SKILLS)) {
       expect(s.cd, `${k} のCD`).toBeGreaterThanOrEqual(1);
-      expect(s.spec.mult, `${k} の倍率`).toBeGreaterThan(0);
-      expect(s.spec.hits, `${k} のヒット数`).toBeGreaterThanOrEqual(1);
+      if (s.spec.kind) {
+        if (s.spec.counterMult !== undefined) expect(s.spec.counterMult, `${k} の反撃倍率`).toBeGreaterThan(0);
+        if (s.spec.healPct !== undefined) expect(s.spec.healPct, `${k} の回復割合`).toBeGreaterThan(0);
+        if (s.spec.shieldPct !== undefined) expect(s.spec.shieldPct, `${k} の障壁割合`).toBeGreaterThan(0);
+      } else {
+        expect(s.spec.mult, `${k} の倍率`).toBeGreaterThan(0);
+        expect(s.spec.hits, `${k} のヒット数`).toBeGreaterThanOrEqual(1);
+      }
     }
   });
   it("SLOTSとSLOT_KEYSが一致する", () => {
