@@ -2088,7 +2088,15 @@ export default function HackRoguelike() {
           </div>
         ) : <div style={{ marginBottom: 6 }} />}
         <div style={{ background: "#161210", border: "1px solid #292524", borderRadius: 10, padding: 12, marginBottom: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "7px 18px", fontSize: 13 }}>
-          {[["⚔️ 攻撃力", stats.atk], ["🛡️ 防御力", stats.def], ["❤️ 最大HP", stats.maxHp], ["💥 クリ率", stats.crit + "%"], ["🔥 クリ倍率", stats.critDmg + "%"], ["🩸 吸血", stats.lifesteal + "%"], ["⚡ 連撃率", stats.double + "%"], ["🌵 棘", thornsEffective(stats)]].map(([k, v]) => (
+          {[
+            ["⚔️ 攻撃力", stats.atk], ["🛡️ 防御力", stats.def], ["❤️ 最大HP", stats.maxHp], ["💥 クリ率", stats.crit + "%"], ["🔥 クリ倍率", stats.critDmg + "%"], ["🩸 吸血", stats.lifesteal + "%"], ["⚡ 連撃率", stats.double + "%"], ["🌵 棘", thornsEffective(stats)],
+            // シナジー系(積んでいる時だけ表示。0の人には出さない)
+            ...(stats.poisonPower > 0 ? [["🟣 毒威力", stats.poisonPower + "%"]] : []),
+            ...(stats.burnPower > 0 ? [["🔥 炎威力", stats.burnPower + "%"]] : []),
+            ...(stats.bleedPower > 0 ? [["🩸 出血威力", stats.bleedPower + "%"]] : []),
+            ...(stats.weakenPower > 0 ? [["🔻 衰弱威力", stats.weakenPower + "%"]] : []),
+            ...(stats.dmgVsStatus > 0 ? [["🎯 対状態異常", stats.dmgVsStatus + "%"]] : []),
+          ].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between" }}>
               <span style={{ color: "#a8a29e" }}>{k}</span><span style={{ fontWeight: 700 }}>{v}</span>
             </div>
@@ -2277,7 +2285,7 @@ export default function HackRoguelike() {
           {RELICS.map(r => <Chip key={r.key} found={knownRelics.has(r.key)} icon={r.icon} name={r.name} desc={r.desc} color="#c084fc" />)}
         </Section>
         <Section rewardKey="abilities" title="✦ 固有能力図鑑" color="#f97316" total={ABILITIES.length} known={ABILITIES.filter(a => knownAbilities.has(a.key)).length}>
-          {ABILITIES.map(a => <Chip key={a.key} found={knownAbilities.has(a.key)} icon={a.name[0]} name={a.name} desc={a.desc} color="#f97316" />)}
+          {ABILITIES.map(a => <Chip key={a.key} found={knownAbilities.has(a.key)} icon="✦" name={a.name} desc={a.desc} color="#f97316" />)}
         </Section>
         <button onClick={() => setScene("title")} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 6 }}>タイトルへ戻る</button>
       </div>
