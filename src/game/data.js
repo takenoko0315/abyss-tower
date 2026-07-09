@@ -375,8 +375,8 @@ export const BOSS_POOLS = [
   ],
   [ // 10F
     { name: "死霊騎士", icon: "⚔️", pattern: ["guard", "attack", "heavy"], gimmick: "undying" },
-    { name: "ミノタウロス", icon: "🐂", pattern: ["roar", "flurry", "heavy"], gimmick: "rage" },
-    { name: "鉄の処刑人", icon: "🪓", pattern: ["attack", "heavy", "heavy"], gimmick: null },
+    { name: "ミノタウロス", icon: "🐂", pattern: ["roar", "attack", "heavy"], gimmick: "rage" },
+    { name: "鉄の処刑人", icon: "🪓", pattern: ["attack", "attack", "heavy"], gimmick: null },
   ],
   [ // 15F
     { name: "古竜", icon: "🐉", pattern: ["roar", "heavy", "attack", "heavy"], gimmick: "stoneskin" },
