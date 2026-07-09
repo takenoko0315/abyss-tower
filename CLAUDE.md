@@ -16,7 +16,7 @@ React + Vite製のローグライクRPG。UIテキストは日本語。
 - `src/AbyssTower.jsx` — 画面・戦闘ロジック・ラン中の可変状態。ラン開始時に `ACTIVE_DIFF` / `ACTIVE_MOD` / `ACTIVE_ZONE` / `ACTIVE_ASCENSION_FX` 等のモジュール変数を書き換え、ロジック各所がそれを読む設計
 - `src/game/data.js` — 静的テーブル(敵・ボス・スキル・レリック・祝福・出自・世界モディファイア・ゾーン・深淵の彼方・イベント以外)。行を足すだけで追加できる
 - `src/game/data.test.js` — 参照切れ(存在しないギミック名等)・キー重複の自動検出。テーブルを増やしたらここにも検査を足す
-- `src/game/sfx.js` — 効果音(Web Audio合成)。`storage.js` — セーブ(localStorage/window.storage)。`utils.js` — 汎用ヘルパー
+- `src/game/sfx.js` — 効果音(Web Audio合成)。`bgm.js` — BGM再生(`public/bgm/`のmp3、初回のユーザー操作で自動再生開始)。`storage.js` — セーブ(localStorage/window.storage)。`utils.js` — 汎用ヘルパー
 - イベント(？？？部屋)だけは `AbyssTower.jsx` 内の `EVENTS` 配列にある(コンポーネントのstateを使うため)。追加時は `chooseRoom` の抽選リストにもキーを足すこと
 
 ## 慣習・注意
