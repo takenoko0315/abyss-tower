@@ -342,11 +342,21 @@ export default function HackRoguelike() {
   const [muted, setMuted] = useState(false);
   useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, codexRewards: [], ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); } }); }, []);
   useEffect(() => { setSfxMuted(muted); setBgmMuted(muted); }, [muted]);
-  // BGMはブラウザの自動再生制限があるため、最初のユーザー操作(クリック/タップ)を待って再生する
+  // BGMはブラウザの自動再生制限があるため、ユーザー操作の中でplay()する必要がある。
+  // モバイルSafari等は最初の1回だけでは解除に失敗することがあるため、実際に再生が始まるまでclick/touchendのたびに再試行する
   useEffect(() => {
-    const unlock = () => { playBgm(); window.removeEventListener("pointerdown", unlock); };
-    window.addEventListener("pointerdown", unlock);
-    return () => window.removeEventListener("pointerdown", unlock);
+    const unlock = () => {
+      playBgm().then(() => {
+        window.removeEventListener("click", unlock);
+        window.removeEventListener("touchend", unlock);
+      }).catch(() => { /* まだ再生を許可されていない。次の操作で再試行 */ });
+    };
+    window.addEventListener("click", unlock);
+    window.addEventListener("touchend", unlock);
+    return () => {
+      window.removeEventListener("click", unlock);
+      window.removeEventListener("touchend", unlock);
+    };
   }, []);
   // 図鑑(コレクション):敵・レリック・固有能力を発見済みとして永続記録する
   const recordCodex = useCallback((category, keys) => {

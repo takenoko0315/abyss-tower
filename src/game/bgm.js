@@ -12,11 +12,12 @@ function getAudio() {
   return audio;
 }
 
-// 初回のユーザー操作(クリック/タップ)の中で呼ぶこと。2回目以降は再生中なら何もしない
+// 初回のユーザー操作(クリック/タップ)の中で呼ぶこと。play()が実際に成功したかどうかをPromiseで返す
+// (モバイルSafari等は自動再生ブロックの解除に厳密なユーザー操作を要求するため、失敗したら呼び出し側で再試行できるようにする)
 export function playBgm() {
   const a = getAudio();
-  if (!a.paused) return;
-  a.play().catch(() => { /* 自動再生がブロックされても静かに無視(次の操作で再試行される) */ });
+  if (!a.paused) return Promise.resolve();
+  return a.play();
 }
 
 export function setBgmMuted(v) {
