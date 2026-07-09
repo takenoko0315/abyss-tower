@@ -8,7 +8,8 @@ React + Vite製のローグライクRPG。UIテキストは日本語。
 1. 編集する — コンテンツ追加は `src/game/data.js`、ロジック・UIは `src/AbyssTower.jsx`
 2. `npm run check` — lint + データ整合性テスト + ビルドを一括実行
 3. ブラウザで見た目・挙動が変わる変更のみ、previewでスモークテスト
-4. `git push` — GitHub Actionsが自動でlint+test+build+デプロイ(約1分)
+4. **バランスに影響する変更(敵・スキル・レリック・祝福・難易度カーブ等)の後は `npm run balance -- --runs=160` を実行し、出力の要約をコミットメッセージに含める**(下記「バランス計測」参照)
+5. `git push` — GitHub Actionsが自動でlint+test+build+デプロイ(約1分)
    - gh CLIを使う時はBashで `export PATH="$PATH:/c/Program Files/GitHub CLI"` が必要
 
 ## 構成
@@ -26,6 +27,7 @@ React + Vite製のローグライクRPG。UIテキストは日本語。
 - セーブデータはlocalStorageキー `abyss-meta` (souls / buys / best / codex / muted)
 - 関数名に `use` 接頭辞を付けない(Reactフックとlintに誤検出される。過去に useSkill → castSkill と改名済み)
 - 表示用ステータス名は `STAT_LABELS`、%表示するキーは `PCT_KEYS` に登録が必要
+- **コンポーネント本体でトップレベル`await`を含むコード(useEffectの直書き含む)を追加する時、その中で参照する`const`/`function`が定義済みか必ず確認する。** 後方で定義された`const`を先に参照するとTDZ(`Cannot access 'X' before initialization`)で本番同様に画面が真っ白になる。`npm run build`は通ってしまう(構文エラーではなく実行時エラーのため)ので、ビルド確認だけでは検出できない。JSXを触った後は必ずブラウザで実際に起動確認すること(3回踏んだ実績あり: addLog, EVENTS)
 
 ## 開発用チートAPI (devサーバー限定・本番には入らない)
 
@@ -38,6 +40,17 @@ React + Vite製のローグライクRPG。UIテキストは日本語。
 - `abyss.jump(f)` — f階に移動(ボス・深層のテストに)
 - `abyss.best(n)` — 最高到達階を書き換え(深淵の彼方の解禁条件=20階クリアの確認に)
 - `abyss.status(type, turns, dmg)` — 現在の敵に状態異常を直接付与(poison/burn/bleed/freeze/stun/weakenのテストに。weakenのdmgは減衰%、poison/bleedは継続ダメージ量)
+
+## バランス計測(自動プレイテスト)
+
+`npm run balance -- --runs=160 --diff=ノーマル` — jsdom + React Testing Libraryでゲームを実際にボタン操作させ、平均到達階・クリア率・ボス階死亡率・契約(キーストーン)別到達階などを集計する。
+
+- 実体: `scripts/balance-worker-core.mjs`(jsdom上でAbyssTowerを実際にクリックして1ランプレイする本体) を `scripts/balance-bot.mjs`(オーケストレーター)がesbuildで事前バンドルし、CPUコア数ぶんの子プロセスに分けて並列実行する
+  - jsdomのimportだけで1プロセスあたり約1.7秒かかり、これは並列化しても短縮できない下限(既知の制約)。160ランは目安1〜2分で終わる。速さそのものは目的ではなく「気軽に何度も回せること」が目的
+- ボットの行動方針(過去の実績あるポリシーを踏襲、変更する場合は `balance-worker-core.mjs` の `actOnce` を編集):
+  戦闘は大技/連攻を85%で防御・HP45%未満で回復薬・スキルは使えれば60%で使用、それ以外は攻撃。分岐路はHP50%未満なら焚き火優先。選択画面(クラス・型・祝福・出自・ゾーン・パーク等)はランダム。戦利品は70%で装備、未鑑定は50%で賭け装備
+- 画面判定はDOM文言のscrapingではなく、`AbyssTower.jsx`がdevのみ公開する `window.__abyssDebug`(scene/player/enemy/pathOptions等の生の状態)を読む。新しいシーンを追加したら、この公開オブジェクト(コンポーネント本体の`if (import.meta.env.DEV) { window.__abyssDebug = {...} }`のブロック)にも必要なstateを足すこと。ここも上記TDZ注意の対象(定義済みの変数しか入れられない)
+- `--workers=N` で並列数を指定可能(既定はCPUコア数)
 
 ## ブラウザテストの作法
 

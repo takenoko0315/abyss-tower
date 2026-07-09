@@ -2191,6 +2191,15 @@ export default function HackRoguelike() {
     </div>
   );
 
+  // balance-bot(scripts/balance-bot.mjs)用。DOM文言のscrapingだと脆いため、現在の画面判定に必要な生の状態をそのまま公開する(devのみ)
+  if (import.meta.env.DEV) {
+    window.__abyssDebug = {
+      scene, floor, player, stats, enemy, cds,
+      pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices,
+      drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
+    };
+  }
+
   // ===== タイトル =====
   if (scene === "title") return (
     <div style={{ ...wrap, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center" }}>
