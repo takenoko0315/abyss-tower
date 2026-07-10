@@ -38,8 +38,8 @@ export const BLESSINGS = [
   { key: "ks_blood", icon: "🍷", keystone: true, name: "血の渇望", desc: "【契約】回復薬を一切持てない。代わりに吸血+10%・敵撃破時に最大HPの30%回復", apply: p => ({ ...p, potions: 0, hooks: { ...(p.hooks || {}), noPotion: 1, lifesteal: 10, onKillHeal: 30 } }) },
   { key: "ks_giant", icon: "🗿", keystone: true, name: "鈍重な巨人", desc: "【契約】クリティカルが一切出なくなる。代わりに全ての与ダメージ+50%", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), noCrit: 1, flatDmg: 50 } }) },
   { key: "ks_glass", icon: "🪞", keystone: true, name: "硝子の魂", desc: "【契約】最大HP-40%。代わりに与ダメ+35%・連撃+15%・回避+10%", apply: p => { const cut = Math.round(p.maxHp * 0.4); return { ...p, maxHp: p.maxHp - cut, hp: Math.max(1, p.hp - cut), hooks: { ...(p.hooks || {}), flatDmg: 35, double: 15, dodge: 10 } }; } },
-  { key: "ks_silence", icon: "🤐", keystone: true, name: "無音の誓い", desc: "【契約】スキルが使えなくなる。代わりに通常攻撃の与ダメ+60%・連撃+20%", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), noSkill: 1, basicBonus: 60, double: 20 } }) },
-  { key: "ks_leaden", icon: "🛡️", keystone: true, name: "鉛の鎧", desc: "【契約】連撃が一切出なくなる。代わりに受けるダメージ-25%", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), noDouble: 1, dmgReduce: 25 } }) },
+  { key: "ks_silence", icon: "🤐", keystone: true, name: "無音の誓い", desc: "【契約】スキルが使えなくなる。代わりに通常攻撃の与ダメ+45%・連撃+20%", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), noSkill: 1, basicBonus: 45, double: 20 } }) },
+  { key: "ks_leaden", icon: "🛡️", keystone: true, name: "鉛の鎧", desc: "【契約】連撃が一切出なくなる。代わりに受けるダメージ-18%", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), noDouble: 1, dmgReduce: 18 } }) },
   { key: "ks_bloodbowl", icon: "🥣", keystone: true, name: "血染めの杯", desc: "【契約】吸血+15%。だが毎ターン最大HPの3%を失い続ける", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), lifesteal: 15, drainPerTurn: 3 } }) },
   { key: "ks_chaos", icon: "🎲", keystone: true, name: "深淵の賽", desc: "【契約】与ダメも被ダメも、常に50%で1.5倍・50%で0.66倍になる", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), chaosDice: 1 } }) },
 ];
