@@ -12,6 +12,7 @@ const RUNS = parseInt(args.runs || "1", 10);
 const DIFF_NAME = args.diff || "ノーマル";
 const CLASS_FILTER = args.class || null; // 指定時はクラス選択画面で固定のクラスを選ぶ(assassin/warrior/vampire/mage)
 const POLICY = args.policy || "standard"; // standard(既定・防御多用) / aggressive(防御しない)
+const BLESSING_FILTER = args.blessing || null; // 指定時は祝福選択画面で固定の祝福を選ぶ(ks_xxxのキー、または契約を避ける"none")
 
 const { JSDOM } = await import("jsdom");
 const dom = new JSDOM(`<!doctype html><html><body><div id="root"></div></body></html>`, {
@@ -46,7 +47,9 @@ if (dom.window.HTMLMediaElement) {
 const React = await import("react");
 const { render, fireEvent, cleanup } = await import("@testing-library/react");
 const { default: HackRoguelike } = await import("../src/AbyssTower.jsx");
-const { SKILLS } = await import("../src/game/data.js");
+const { SKILLS, BLESSINGS } = await import("../src/game/data.js");
+const BLESSING_NAME = Object.fromEntries(BLESSINGS.map(b => [b.key, b.name]));
+const KEYSTONE_KEYS = new Set(BLESSINGS.filter(b => b.keystone).map(b => b.key));
 
 const MAX_ACTIONS = 4000;
 const rand = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -80,7 +83,21 @@ function actOnce(container, d) {
       return clickRandom(container, ["戻る"]);
     case "variantSelect": return clickRandom(container, ["クラス選択に戻る"]);
     case "diffSelect": return clickByText(container, DIFF_NAME) || clickRandom(container, ["クラス選択に戻る"]);
-    case "blessing": return clickRandom(container);
+    case "blessing": {
+      const choices = d.blessingChoices || [];
+      if (BLESSING_FILTER === "none") {
+        // 契約(キーストーン)を避け、通常祝福からランダムに選ぶ(基準計測用)
+        const nonKs = choices.filter(k => !KEYSTONE_KEYS.has(k));
+        const k = rand(nonKs.length ? nonKs : choices);
+        return clickByText(container, BLESSING_NAME[k]);
+      }
+      if (BLESSING_FILTER) {
+        // 指定した契約が選択肢になければfalseを返す(playOneRun側でリロール扱い)
+        if (!choices.includes(BLESSING_FILTER)) return false;
+        return clickByText(container, BLESSING_NAME[BLESSING_FILTER]);
+      }
+      return clickRandom(container);
+    }
     case "origin": return clickRandom(container);
     case "zoneSelect": return clickRandom(container);
     case "levelup": return clickRandom(container);
@@ -142,7 +159,11 @@ function playOneRun() {
       if (d.scene === "dead") return { result: "dead", floor: d.floor, cls: d.player.cls, blessing: d.player.blessing, lastEnemy, actions };
       if (d.scene === "victory") return { result: "victory", floor: 20, cls: d.player.cls, blessing: d.player.blessing, lastEnemy, actions };
       const acted = actOnce(container, d);
-      if (!acted) throw new Error(`シーン"${d.scene}"でクリック可能なボタンが見つからない`);
+      if (!acted) {
+        // 指定した契約(--blessing)がこのランの選択肢に出なかった場合はエラーにせずリロール扱い
+        if (d.scene === "blessing" && BLESSING_FILTER && BLESSING_FILTER !== "none") return { result: "reroll" };
+        throw new Error(`シーン"${d.scene}"でクリック可能なボタンが見つからない`);
+      }
     }
     const d = dbg();
     return { result: "timeout", floor: d?.floor, cls: d?.player?.cls, blessing: d?.player?.blessing, lastEnemy, actions };
@@ -156,5 +177,11 @@ function playOneRun() {
 }
 
 const out = [];
-for (let i = 0; i < RUNS; i++) out.push(playOneRun());
+let rerolls = 0;
+while (out.length < RUNS) {
+  const r = playOneRun();
+  if (r.result === "reroll") { rerolls++; continue; }
+  out.push(r);
+}
+if (rerolls > 0) console.error(`[balance-worker] --blessing=${BLESSING_FILTER} のリロール数: ${rerolls}(選択肢に出ないランを破棄して作り直した回数)`);
 console.log(JSON.stringify(out));

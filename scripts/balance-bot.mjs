@@ -28,6 +28,7 @@ const DIFF_NAME = args.diff || "ノーマル";
 const WORKERS = Math.max(1, Math.min(RUNS, parseInt(args.workers || String(os.cpus().length), 10)));
 const CLASS_FILTER = args.class || null; // 指定時はそのクラス固定でランする(assassin/warrior/vampire/mage)
 const POLICY = args.policy || "standard"; // standard(既定) / aggressive(防御しない)
+const BLESSING_FILTER = args.blessing || null; // 指定時はその祝福固定でランする(ks_xxxのキー、または契約を避ける"none")
 const KEYSTONE_NAMES = {
   ks_thorn: "茨の誓約", ks_blood: "血の渇望", ks_giant: "鈍重な巨人", ks_glass: "硝子の魂",
   ks_silence: "無音の誓い", ks_leaden: "鉛の鎧", ks_bloodbowl: "血染めの杯", ks_chaos: "深淵の賽",
@@ -42,7 +43,7 @@ async function main() {
 
   const t1 = Date.now();
   const chunks = splitEvenly(RUNS, WORKERS);
-  const optTag = `${CLASS_FILTER ? `・クラス固定:${CLASS_FILTER}` : ""}${args.policy ? `・方針:${POLICY}` : ""}`;
+  const optTag = `${CLASS_FILTER ? `・クラス固定:${CLASS_FILTER}` : ""}${args.policy ? `・方針:${POLICY}` : ""}${BLESSING_FILTER ? `・祝福固定:${BLESSING_FILTER}` : ""}`;
   console.log(`起動: ${RUNS}ラン・難易度:${DIFF_NAME}${optTag}・${chunks.length}並列(1プロセスあたり${chunks[0]}ラン前後)・バンドル${buildSec}秒`);
   // 全プロセスを同時起動するとjsdomの重いimport(ディスクI/O)が競合して遅くなるため、起動を少しずつずらす
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -93,6 +94,7 @@ function spawnWorker(runs) {
     const extraArgs = [];
     if (CLASS_FILTER) extraArgs.push(`--class=${CLASS_FILTER}`);
     if (args.policy) extraArgs.push(`--policy=${POLICY}`);
+    if (BLESSING_FILTER) extraArgs.push(`--blessing=${BLESSING_FILTER}`);
     const child = spawn(
       process.execPath,
       [BUNDLE_PATH, `--runs=${runs}`, `--diff=${DIFF_NAME}`, ...extraArgs],
