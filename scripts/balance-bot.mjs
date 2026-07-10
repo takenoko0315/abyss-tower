@@ -26,6 +26,8 @@ const args = Object.fromEntries(
 const RUNS = parseInt(args.runs || "30", 10);
 const DIFF_NAME = args.diff || "ノーマル";
 const WORKERS = Math.max(1, Math.min(RUNS, parseInt(args.workers || String(os.cpus().length), 10)));
+const CLASS_FILTER = args.class || null; // 指定時はそのクラス固定でランする(assassin/warrior/vampire/mage)
+const POLICY = args.policy || "standard"; // standard(既定) / aggressive(防御しない)
 const KEYSTONE_NAMES = {
   ks_thorn: "茨の誓約", ks_blood: "血の渇望", ks_giant: "鈍重な巨人", ks_glass: "硝子の魂",
   ks_silence: "無音の誓い", ks_leaden: "鉛の鎧", ks_bloodbowl: "血染めの杯", ks_chaos: "深淵の賽",
@@ -40,7 +42,8 @@ async function main() {
 
   const t1 = Date.now();
   const chunks = splitEvenly(RUNS, WORKERS);
-  console.log(`起動: ${RUNS}ラン・難易度:${DIFF_NAME}・${chunks.length}並列(1プロセスあたり${chunks[0]}ラン前後)・バンドル${buildSec}秒`);
+  const optTag = `${CLASS_FILTER ? `・クラス固定:${CLASS_FILTER}` : ""}${args.policy ? `・方針:${POLICY}` : ""}`;
+  console.log(`起動: ${RUNS}ラン・難易度:${DIFF_NAME}${optTag}・${chunks.length}並列(1プロセスあたり${chunks[0]}ラン前後)・バンドル${buildSec}秒`);
   // 全プロセスを同時起動するとjsdomの重いimport(ディスクI/O)が競合して遅くなるため、起動を少しずつずらす
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const outputs = await Promise.all(chunks.map(async (n, i) => { await sleep(i * 60); return spawnWorker(n); }));
@@ -87,9 +90,12 @@ function splitEvenly(total, parts) {
 
 function spawnWorker(runs) {
   return new Promise((resolve, reject) => {
+    const extraArgs = [];
+    if (CLASS_FILTER) extraArgs.push(`--class=${CLASS_FILTER}`);
+    if (args.policy) extraArgs.push(`--policy=${POLICY}`);
     const child = spawn(
       process.execPath,
-      [BUNDLE_PATH, `--runs=${runs}`, `--diff=${DIFF_NAME}`],
+      [BUNDLE_PATH, `--runs=${runs}`, `--diff=${DIFF_NAME}`, ...extraArgs],
       { stdio: ["ignore", "pipe", "inherit"], cwd: PROJECT_ROOT }
     );
     let out = "";
@@ -142,6 +148,16 @@ function printReport(results, elapsedSec, buildSec) {
   const dist = {};
   for (const r of distTargets) dist[r.floor || 0] = (dist[r.floor || 0] || 0) + 1;
   for (const f of Object.keys(dist).map(Number).sort((a, b) => a - b)) console.log(`${f}F: ${dist[f]}件`);
+
+  console.log(`\n--- クラス別 死亡階分布(死亡・タイムアウトのみ) ---`);
+  const classesInDist = [...new Set(distTargets.map(r => r.cls || "(不明)"))].sort();
+  for (const c of classesInDist) {
+    const rs = distTargets.filter(r => (r.cls || "(不明)") === c);
+    const d = {};
+    for (const r of rs) d[r.floor || 0] = (d[r.floor || 0] || 0) + 1;
+    const parts = Object.keys(d).map(Number).sort((a, b) => a - b).map(f => `${f}F:${d[f]}件`).join(" ");
+    console.log(`${c} (n=${rs.length}): ${parts}`);
+  }
 
   console.log(`\n--- ボス階(5/10/15/20F)死亡 ---`);
   const bossFloorDeaths = distTargets.filter(r => r.floor && r.floor % 5 === 0);

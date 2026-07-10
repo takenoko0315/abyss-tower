@@ -51,6 +51,9 @@ React + Vite製のローグライクRPG。UIテキストは日本語。
   戦闘は大技/連攻を85%で防御・HP45%未満で回復薬・スキルは使えれば60%で使用、それ以外は攻撃。分岐路はHP50%未満なら焚き火優先。選択画面(クラス・型・祝福・出自・ゾーン・パーク等)はランダム。戦利品は70%で装備、未鑑定は50%で賭け装備
 - 画面判定はDOM文言のscrapingではなく、`AbyssTower.jsx`がdevのみ公開する `window.__abyssDebug`(scene/player/enemy/pathOptions等の生の状態)を読む。新しいシーンを追加したら、この公開オブジェクト(コンポーネント本体の`if (import.meta.env.DEV) { window.__abyssDebug = {...} }`のブロック)にも必要なstateを足すこと。ここも上記TDZ注意の対象(定義済みの変数しか入れられない)
 - `--workers=N` で並列数を指定可能(既定はCPUコア数)
+- `--class=assassin/warrior/vampire/mage` でクラス固定のランができる(クラス格差の診断時、n=ラン数がそのクラスに全振りされるためブレが小さくなる)
+- `--policy=standard/aggressive` で行動方針を切り替え可能(既定standard=上記の防御多用方針。aggressive=防御しない・大技/連攻の予告時はスキル優先→攻撃。潜在能力とbot相性の切り分けに使う)
+- 出力の「クラス別 死亡階分布」で、クラスごとにどの階で死んでいるかを見られる
 
 ## ブラウザテストの作法
 

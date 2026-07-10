@@ -10,6 +10,8 @@ const args = Object.fromEntries(
 );
 const RUNS = parseInt(args.runs || "1", 10);
 const DIFF_NAME = args.diff || "ノーマル";
+const CLASS_FILTER = args.class || null; // 指定時はクラス選択画面で固定のクラスを選ぶ(assassin/warrior/vampire/mage)
+const POLICY = args.policy || "standard"; // standard(既定・防御多用) / aggressive(防御しない)
 
 const { JSDOM } = await import("jsdom");
 const dom = new JSDOM(`<!doctype html><html><body><div id="root"></div></body></html>`, {
@@ -67,11 +69,15 @@ function clickRandom(container, excludeTexts = []) {
 }
 
 // ===== ボットの行動方針 =====
+const CLASS_LABEL = { assassin: "暗殺者", warrior: "戦士", vampire: "吸血鬼", mage: "魔術師" };
+
 function actOnce(container, d) {
   const { scene, player, stats, enemy, cds, drop } = d;
   switch (scene) {
     case "title": return clickByText(container, "挑戦する");
-    case "classSelect": return clickRandom(container, ["戻る"]);
+    case "classSelect":
+      if (CLASS_FILTER) return clickByText(container, CLASS_LABEL[CLASS_FILTER]) || clickRandom(container, ["戻る"]);
+      return clickRandom(container, ["戻る"]);
     case "variantSelect": return clickRandom(container, ["クラス選択に戻る"]);
     case "diffSelect": return clickByText(container, DIFF_NAME) || clickRandom(container, ["クラス選択に戻る"]);
     case "blessing": return clickRandom(container);
@@ -99,10 +105,18 @@ function actOnce(container, d) {
     }
     case "combat": {
       const isThreat = enemy?.intent === "heavy" || enemy?.intent === "flurry";
-      if (isThreat && chance(0.85) && clickByText(container, "防御")) return true;
+      if (POLICY === "standard" && isThreat && chance(0.85) && clickByText(container, "防御")) return true;
       const hpPct = player.hp / stats.maxHp;
       if (hpPct < 0.45 && player.potions > 0 && clickByText(container, "🧪")) return true;
       const usable = (player.skills || []).filter(k => (cds[k] || 0) === 0 && !player.petrified);
+      // aggressive方針:防御せず、大技/連攻の予告時はスキルを優先(なければ攻撃)
+      if (POLICY === "aggressive" && isThreat) {
+        if (usable.length) {
+          const k = rand(usable);
+          if (clickByText(container, SKILLS[k].name)) return true;
+        }
+        return clickByText(container, "⚔️ 攻撃");
+      }
       if (usable.length && chance(0.6)) {
         const k = rand(usable);
         if (clickByText(container, SKILLS[k].name)) return true;
