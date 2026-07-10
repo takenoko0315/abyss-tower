@@ -471,6 +471,7 @@ export default function HackRoguelike() {
     p.ascension = ascensionKeys;
     if (diffKey === "hell") p.hooks.cheatDeath = 1; // 地獄の加護:開始時から致死を1回だけ耐える
     if (clsKey === "vampire" && variantKey === "a") p.lifesteal += 4; // 渇血
+    if (clsKey === "assassin") p.combo = 2; // 暗殺者「コンボ」: 最初の戦闘も+2から開始
     const bless = BLESSINGS.find(b => b.key === blessingKey);
     if (bless) {
       p.blessing = bless.key;
@@ -730,9 +731,9 @@ export default function HackRoguelike() {
             addLog(`🔥 闘志が滾る(${p.fury}/${fCap})${p.fury >= fCap ? " — 次の攻撃で解放！" : ""}`, "info");
           }
         }
-        // 暗殺者「コンボ」: HPにダメージを受けると-2
+        // 暗殺者「コンボ」: HPにダメージを受けると-1
         if (player.cls === "assassin" && dmg > 0 && (p.combo || 0) > 0) {
-          p = { ...p, combo: Math.max(0, p.combo - 2) };
+          p = { ...p, combo: Math.max(0, p.combo - 1) };
           addLog(`💔 コンボが乱れた(×${p.combo})`, "info");
         }
         if (i === 0) SFX[act === "heavy" ? "heavyHit" : "hurt"]();
@@ -1012,6 +1013,10 @@ export default function HackRoguelike() {
   };
 
   const regenOnCombatStart = () => {
+    // 暗殺者「コンボ」: 新しい戦闘は+2から開始(影の相伝の持ち越し値がある場合はそちらを優先)
+    if (player.cls === "assassin") {
+      setPlayer(p => ({ ...p, combo: Math.max(p.combo || 0, 2) }));
+    }
     if (!hasRelic(player, "regenStart")) return;
     if (player.hp >= stats.maxHp) return;
     const heal = Math.min(stats.maxHp - player.hp, Math.round(stats.maxHp * 0.12));
@@ -2208,7 +2213,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.44 — 10Fボスの難易度調整</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.45 — 暗殺者の底上げ</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>

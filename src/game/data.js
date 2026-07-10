@@ -453,7 +453,7 @@ export const CLASSES = {
   },
   assassin: {
     name: "暗殺者", icon: "🗡️", color: "#a78bfa",
-    desc: "【コンボ】ヒット+1・クリティカル+2で蓄積(クリ率+4%・連撃+2%/個、最大8)。被弾で-2",
+    desc: "【コンボ】戦闘開始+2、ヒット+1・クリティカル+2で蓄積(クリ率+4%・連撃+2%/個、最大8)。被弾で-1",
     passive: "攻撃を途切れさせない者が最強",
     base: p => ({ ...p, crit: p.crit + 20, critDmg: p.critDmg + 40 }),
     skill: "truestrike",
