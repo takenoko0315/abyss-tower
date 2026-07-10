@@ -23,6 +23,7 @@ const setGlobal = (key, value) => Object.defineProperty(global, key, { value, co
 setGlobal("window", dom.window);
 setGlobal("document", dom.window.document);
 setGlobal("navigator", dom.window.navigator); // Node 22はnavigatorをgetter専用で定義済みのため代入不可。definePropertyで上書き
+dom.window.__abyssTestFast = true; // 戦闘演出(ダメージポップ等)の待ち時間を完全にスキップさせる(TASK-009)
 global.HTMLElement = dom.window.HTMLElement;
 global.Node = dom.window.Node;
 global.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
