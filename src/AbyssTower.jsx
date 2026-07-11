@@ -6,6 +6,14 @@ import { SFX, setSfxMuted, setSfxVolume } from "./game/sfx.js";
 import { playBgm, setBgmMuted, setBgmVolume } from "./game/bgm.js";
 import { metaStorageLoad, metaStorageSave } from "./game/storage.js";
 import { rand, pick, effStats, hasNode, hasRelic } from "./game/utils.js";
+import {
+  calculateAttackDamage,
+  calculateBaseIncomingDamage,
+  decrementStatusTurn,
+  doubleTierChances,
+  mergeStatus,
+  rollAdditionalHits,
+} from "./game/combat.js";
 
 let ACTIVE_DIFF = DIFFICULTIES.normal;
 
@@ -35,18 +43,10 @@ let ACTIVE_BESTIARY = ENEMIES;
 let PENDING_DEATHCURSE = false; // 死の呪い:次の敵への引き継ぎ
 
 function applyStatus(e, type, turns, dmg = 0) {
-  e.status = e.status || {};
   if (type === "freeze") SFX.freeze();
   if (ACTIVE_MOD.statusTurns) turns += ACTIVE_MOD.statusTurns; // 毒気の霧:持続+1
   if (e.trait === "resist") turns = Math.max(1, Math.ceil(turns / 2)); // 耐性持ちは効果時間半分
-  const cur = e.status[type];
-  if (type === "poison" || type === "bleed") {
-    e.status[type] = { turns: Math.max(cur?.turns || 0, turns), dmg: (cur?.dmg || 0) + dmg }; // 毒・出血はダメージ蓄積
-  } else if (type === "weaken") {
-    e.status.weaken = { turns: Math.max(cur?.turns || 0, turns), dmg: Math.max(cur?.dmg || 0, dmg) }; // 衰弱は弱い方で上書きしない(dmgに減衰率%を保持)
-  } else {
-    e.status[type] = { turns: Math.max(cur?.turns || 0, turns), dmg };
-  }
+  e.status = mergeStatus(e.status, type, turns, dmg);
 }
 
 function rollRarity(minIdx = 0) {
@@ -588,15 +588,7 @@ export default function HackRoguelike() {
 
   // クリ率・連撃率の100%超オーバーフロー変換(TASK-013)。判定にも表示にも使う共通計算
   // クリ率: 100%超過分は1%につきクリ倍率+1%に変換
-  const critOverflowBonus = (critChance) => Math.max(0, critChance - 100);
   const critDisplay = (critChance) => critChance > 100 ? `100%(+${critChance - 100}%倍率)` : `${critChance}%`;
-  // 連撃率: 100%を1区切りとして超過分を次撃の発生率に変換(120%→[100,20]、220%→[100,100,20])
-  const doubleTierChances = (doubleChance) => {
-    const tiers = [];
-    let remaining = doubleChance;
-    while (remaining > 0) { tiers.push(Math.min(100, remaining)); remaining -= 100; }
-    return tiers;
-  };
   const doubleDisplay = (doubleChance) => {
     const tiers = doubleTierChances(doubleChance);
     if (tiers.length <= 1) return `${doubleChance}%`;
@@ -655,13 +647,13 @@ export default function HackRoguelike() {
         e.hp -= e.status.poison.dmg;
         addLog(`🟣 ${e.name}は毒で${e.status.poison.dmg}ダメージ`, "dmg");
         if (enemyStatusLog) enemyStatusLog.push({ dmg: e.status.poison.dmg, status: "poison" }); // 状態異常ポップ用(TASK-010)
-        e.status.poison.turns--;
+        e.status = decrementStatusTurn(e.status, "poison");
       }
       if (e.status.bleed?.turns > 0) {
         e.hp -= e.status.bleed.dmg;
         addLog(`🩸 ${e.name}は出血で${e.status.bleed.dmg}ダメージ`, "dmg");
         if (enemyStatusLog) enemyStatusLog.push({ dmg: e.status.bleed.dmg, status: "bleed" });
-        e.status.bleed.turns--;
+        e.status = decrementStatusTurn(e.status, "bleed");
       }
       if (e.status.burn?.turns > 0) {
         let rate = hasNode(player, "m1") ? 0.11 : 0.06; // 業火(ツリー)
@@ -672,15 +664,15 @@ export default function HackRoguelike() {
         e.hp -= d;
         addLog(`🔥 ${e.name}は炎上で${d}ダメージ`, "dmg");
         if (enemyStatusLog) enemyStatusLog.push({ dmg: d, status: "burn" });
-        e.status.burn.turns--;
+        e.status = decrementStatusTurn(e.status, "burn");
       }
     }
     if (e.hp <= 0) return p; // 継続ダメージで撃破(呼び出し側がe.hpを確認)
     // 凍結・気絶で行動不能か(行動不能でも予告した行動は温存される=大技を遅らせる戦術が有効)
     let incap = false;
-    if (e.status?.freeze?.turns > 0) { incap = true; e.status.freeze.turns--; }
-    if (e.status?.stun?.turns > 0) { incap = true; e.status.stun.turns--; }
-    if (e.status?.weaken?.turns > 0) e.status.weaken.turns--; // 衰弱は行動不能にしない(攻撃力が落ちたまま行動する)
+    if (e.status?.freeze?.turns > 0) { incap = true; e.status = decrementStatusTurn(e.status, "freeze"); }
+    if (e.status?.stun?.turns > 0) { incap = true; e.status = decrementStatusTurn(e.status, "stun"); }
+    if (e.status?.weaken?.turns > 0) e.status = decrementStatusTurn(e.status, "weaken"); // 衰弱は行動不能にしない(攻撃力が落ちたまま行動する)
     if (incap) {
       addLog(`${e.name}は動けない！(${INTENTS[e.intent].icon}${INTENTS[e.intent].name}は持ち越し)`, "info");
       return p;
@@ -759,7 +751,7 @@ export default function HackRoguelike() {
         if (stats.poisonWeaken > 0 && e.status?.poison?.turns > 0) raw *= 0.8; // 疫病医:毒の敵は攻撃-20%
         if (e.status?.weaken?.turns > 0) raw *= 1 - e.status.weaken.dmg / 100; // 衰弱:攻撃力低下
         let effDef = stats.def + (e.status?.freeze?.turns > 0 ? Math.round(stats.def * (stats.freezeDefBonus || 0) / 100) : 0); // 氷の鎧
-        let dmg = Math.max(1, Math.round(raw - effDef + rand(-1, 2)));
+        let dmg = calculateBaseIncomingDamage(raw, effDef, rand(-1, 2));
         if (act === "heavy" && stats.heavyResist > 0) dmg = Math.max(1, Math.round(dmg * 0.5)); // 隕鉄の兜
         if (stats.berserk > 0) dmg = Math.round(dmg * 1.15); // 狂戦士:被ダメ+15%
         if (stats.dmgReduce > 0) dmg = Math.max(1, Math.round(dmg * (1 - stats.dmgReduce / 100))); // 鉛の鎧(契約)
@@ -1700,9 +1692,7 @@ export default function HackRoguelike() {
     // 連撃率100%超は「2回目の追加攻撃」以降の発生率に変換(TASK-013)。100%区切りごとに判定
     let bonus = 0;
     if (firstFightDouble) bonus = 1;
-    else for (const ch of doubleTierChances(doubleChance)) {
-      if (Math.random() * 100 < ch) bonus++; else break;
-    }
+    else bonus = rollAdditionalHits(doubleChance);
     if (stats.noDouble > 0) bonus = 0; // 鉛の鎧(契約):連撃封印
     // 加速する連撃: 連撃が発生するたび、その戦闘中は連撃率が蓄積(最大+20%)
     if (bonus > 0 && stats.doubleSnowball > 0) {
@@ -1765,11 +1755,19 @@ export default function HackRoguelike() {
       if (stats.chaosDice > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.66;    // 深淵の賽(契約)
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
-      // クリ率100%超過分は1%につきクリ倍率+1%に変換(TASK-013)。トリガー経路によらず常時適用
-      const critDmgEff = stats.critDmg + critOverflowBonus(critChance);
-      let dmg = Math.round((stats.atk + (p.killMomentum || 0) + rand(-1, 2)) * mult * (isCrit ? critDmgEff / 100 : 1) * (e.trait === "tough" ? 0.75 : 1) * (e.guardTurns > 0 ? 0.5 : 1));
-      if (e.gimmick === "crystalline") dmg = Math.round(dmg * (usedSkill ? 1.5 : 0.8)); // 結晶:スキルに弱く通常攻撃に強い
-      if (e.gimmick === "fragile") dmg = Math.round(dmg * 1.5); // 硝子細工:被ダメ+50%(代わりに与ダメも+50%)
+      const dmg = calculateAttackDamage({
+        attack: stats.atk,
+        killMomentum: p.killMomentum || 0,
+        variance: rand(-1, 2),
+        multiplier: mult,
+        isCritical: isCrit,
+        critDamage: stats.critDmg,
+        critChance,
+        targetTough: e.trait === "tough",
+        targetGuarding: e.guardTurns > 0,
+        crystallineMultiplier: e.gimmick === "crystalline" ? (usedSkill ? 1.5 : 0.8) : 1,
+        targetFragile: e.gimmick === "fragile",
+      });
       // 石殻(ガーゴイル):一定未満の弱い一撃を完全に弾く
       const stoneThresh = 6 + Math.round(floor * 1.2);
       if (e.gimmick === "stoneskin" && dmg < stoneThresh) {
