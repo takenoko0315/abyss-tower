@@ -586,6 +586,23 @@ export default function HackRoguelike() {
   // 棘の実効値(表示にも使う共通計算。鉄壁の棘=防御力加算・逆鱗=攻撃力加算を反映)
   const thornsEffective = (s) => (s.thorns + (s.thornsScale > 0 ? Math.round(s.atk * 0.2) : 0) + (s.thornsDef > 0 ? Math.round(s.def * 0.35) : 0)) * (s.thornsX3 > 0 ? 3 : 1);
 
+  // クリ率・連撃率の100%超オーバーフロー変換(TASK-013)。判定にも表示にも使う共通計算
+  // クリ率: 100%超過分は1%につきクリ倍率+1%に変換
+  const critOverflowBonus = (critChance) => Math.max(0, critChance - 100);
+  const critDisplay = (critChance) => critChance > 100 ? `100%(+${critChance - 100}%倍率)` : `${critChance}%`;
+  // 連撃率: 100%を1区切りとして超過分を次撃の発生率に変換(120%→[100,20]、220%→[100,100,20])
+  const doubleTierChances = (doubleChance) => {
+    const tiers = [];
+    let remaining = doubleChance;
+    while (remaining > 0) { tiers.push(Math.min(100, remaining)); remaining -= 100; }
+    return tiers;
+  };
+  const doubleDisplay = (doubleChance) => {
+    const tiers = doubleTierChances(doubleChance);
+    if (tiers.length <= 1) return `${doubleChance}%`;
+    return tiers.map((t, i) => i === 0 ? `${t}%` : `(+${t}%)`).join("");
+  };
+
   // 棘ダメージの共通処理(反応的発動・能動発動・スキル反撃モッドで共有)
   // スケーリング: 攻撃力加算(逆鱗)・防御力加算(鉄壁の棘)、防御中はdefendThornsMultが加算的に倍加(茨の心+反撃の大盾の重ねがけが効く)
   // さらに血染めの棘で会心、棘の女王で毒付与
@@ -1678,7 +1695,14 @@ export default function HackRoguelike() {
     const baseHits = (spec.hits || 1) + (mod === "chainMod" ? 1 : 0);
     // 暗殺者「コンボ」: 1つにつきクリ率+4%・連撃率+2%
     const combo = player.cls === "assassin" ? (p.combo || 0) : 0;
-    let bonus = (player.firstFightDoubleGuaranteed && kills === 0) ? 1 : (Math.random() * 100 < stats.double + combo * 2 + (p.doubleStack || 0) ? 1 : 0);
+    const doubleChance = stats.double + combo * 2 + (p.doubleStack || 0);
+    const firstFightDouble = player.firstFightDoubleGuaranteed && kills === 0;
+    // 連撃率100%超は「2回目の追加攻撃」以降の発生率に変換(TASK-013)。100%区切りごとに判定
+    let bonus = 0;
+    if (firstFightDouble) bonus = 1;
+    else for (const ch of doubleTierChances(doubleChance)) {
+      if (Math.random() * 100 < ch) bonus++; else break;
+    }
     if (stats.noDouble > 0) bonus = 0; // 鉛の鎧(契約):連撃封印
     // 加速する連撃: 連撃が発生するたび、その戦闘中は連撃率が蓄積(最大+20%)
     if (bonus > 0 && stats.doubleSnowball > 0) {
@@ -1713,7 +1737,8 @@ export default function HackRoguelike() {
         addLog(`🐺 ${e.name}が身をひるがえして回避した！`, "info");
         continue;
       }
-      const isCrit = stats.noCrit > 0 ? false : (spec.forceCrit || furyRelease || (stats.critVsCC > 0 && enemyCCed()) || (player.cls === "assassin" && player.variant === "c" && combo >= 8) || (stats.skillAlwaysCrit > 0 && usedSkill) || (mod === "critMod" && usedSkill) || (stats.rampageCrit > 0 && i >= baseHits) || (hasNode(player, "w10") && p.tookHeavyLast) || (hasNode(player, "a9") && e.hp === e.maxHp) || Math.random() * 100 < stats.crit + combo * 4);
+      const critChance = stats.crit + combo * 4;
+      const isCrit = stats.noCrit > 0 ? false : (spec.forceCrit || furyRelease || (stats.critVsCC > 0 && enemyCCed()) || (player.cls === "assassin" && player.variant === "c" && combo >= 8) || (stats.skillAlwaysCrit > 0 && usedSkill) || (mod === "critMod" && usedSkill) || (stats.rampageCrit > 0 && i >= baseHits) || (hasNode(player, "w10") && p.tookHeavyLast) || (hasNode(player, "a9") && e.hp === e.maxHp) || Math.random() * 100 < critChance);
       if (isCrit) { critLanded = true; critCount++; }
       hitsDone++;
       let mult = spec.execute && e.hp / e.maxHp <= 0.3 ? 3.0 : spec.mult;
@@ -1740,7 +1765,9 @@ export default function HackRoguelike() {
       if (stats.chaosDice > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.66;    // 深淵の賽(契約)
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
-      let dmg = Math.round((stats.atk + (p.killMomentum || 0) + rand(-1, 2)) * mult * (isCrit ? stats.critDmg / 100 : 1) * (e.trait === "tough" ? 0.75 : 1) * (e.guardTurns > 0 ? 0.5 : 1));
+      // クリ率100%超過分は1%につきクリ倍率+1%に変換(TASK-013)。トリガー経路によらず常時適用
+      const critDmgEff = stats.critDmg + critOverflowBonus(critChance);
+      let dmg = Math.round((stats.atk + (p.killMomentum || 0) + rand(-1, 2)) * mult * (isCrit ? critDmgEff / 100 : 1) * (e.trait === "tough" ? 0.75 : 1) * (e.guardTurns > 0 ? 0.5 : 1));
       if (e.gimmick === "crystalline") dmg = Math.round(dmg * (usedSkill ? 1.5 : 0.8)); // 結晶:スキルに弱く通常攻撃に強い
       if (e.gimmick === "fragile") dmg = Math.round(dmg * 1.5); // 硝子細工:被ダメ+50%(代わりに与ダメも+50%)
       // 石殻(ガーゴイル):一定未満の弱い一撃を完全に弾く
@@ -2298,14 +2325,17 @@ export default function HackRoguelike() {
           // 防御力の動的例:現在階の敵の平均的な攻撃力(genEnemyの雑魚用atk式を非破壊で再現)を軽減前後で示す
           const defRawAtk = Math.round(6.5 * enemyScale(floor) * diffMultAt(floor, "atk") * (ACTIVE_MOD.enemyAtk || 1) * (ACTIVE_ZONE.enemyAtk || 1) * ascFx("enemyAtk"));
           const defAfter = Math.max(1, defRawAtk - stats.def);
+          const comboNow = player.cls === "assassin" ? (player.combo || 0) : 0;
+          const critChanceNow = stats.crit + comboNow * 4;
+          const doubleChanceNow = stats.double + comboNow * 2 + (player.doubleStack || 0);
           const CORE_STATS = [
             { k: "atk", label: "⚔️ 攻撃力", v: stats.atk, desc: "与ダメージの基礎値。ここにスキルの倍率やクリティカル倍率など各種補正が掛け算される。" },
             { k: "def", label: "🛡️ 防御力", v: stats.def, desc: `敵の攻撃力から固定値で引き算される(%軽減ではない)。最終ダメージは最低1保証。例:${floor}階の敵の攻撃なら約${defRawAtk}→${defAfter}に軽減` },
             { k: "maxHp", label: "❤️ 最大HP", v: stats.maxHp, desc: "HPの上限値。0になると敗北になる。" },
-            { k: "crit", label: "💥 クリ率", v: stats.crit + "%", desc: "攻撃のたびに判定し、成功するとクリ倍率が乗算される(暗殺者はコンボ数×4%が上乗せ)。100%を超えた分は現状効果がない。" },
-            { k: "critDmg", label: "🔥 クリ倍率", v: stats.critDmg + "%", desc: "クリティカル発生時にダメージへ掛かる倍率。150%なら通常の1.5倍のダメージになる。" },
+            { k: "crit", label: "💥 クリ率", v: critDisplay(critChanceNow), desc: "攻撃のたびに判定し、成功するとクリ倍率が乗算される(暗殺者はコンボ数×4%が上乗せ)。100%を超えた分は1%につきクリ倍率+1%に変換される(例:クリ率130%→確定クリ+クリ倍率+30%)。" },
+            { k: "critDmg", label: "🔥 クリ倍率", v: stats.critDmg + "%", desc: "クリティカル発生時にダメージへ掛かる倍率。150%なら通常の1.5倍のダメージになる(クリ率オーバーフロー分がここに加算される)。" },
             { k: "lifesteal", label: "🩸 吸血", v: stats.lifesteal + "%", desc: "与えたダメージの分だけHPを回復する(最低1)。吸血鬼クラスは上限を超えた回復分の2倍が「障壁」に変換される(上限は最大HPの25%、型Cは40%)。" },
-            { k: "double", label: "⚡ 連撃率", v: stats.double + "%", desc: "攻撃のたびに判定し、成功すると追加の1撃が発生する(暗殺者はコンボ数×2%が上乗せ)。100%を超えた分は現状効果がない。" },
+            { k: "double", label: "⚡ 連撃率", v: doubleDisplay(doubleChanceNow), desc: "攻撃のたびに判定し、成功すると追加の1撃が発生する(暗殺者はコンボ数×2%が上乗せ)。100%を超えた分は「2回目の追加攻撃」の発生率に変換される(例:連撃率120%→追加1撃確定+20%でさらにもう1撃。200%超も同様に3撃目へ)。" },
             { k: "thorns", label: "🌵 棘", v: thornsEffective(stats), desc: "被弾時・防御時に敵へ反射するダメージ。装備によっては攻撃力/防御力からもボーナスが加算され、防御中はさらに加算的に増加することがある。" },
           ];
           const SYNERGY_STATS = [
@@ -2429,7 +2459,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.49 — ステータス説明の追加</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.50 — クリ率・連撃率オーバーフロー変換</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
@@ -3263,12 +3293,19 @@ export default function HackRoguelike() {
       {turnPending && (
         <div style={{ textAlign: "center", fontSize: 11, color: "#78716c", margin: "4px 0" }}>敵のターン…</div>
       )}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 11, color: "#78716c", margin: "8px 0 12px" }}>
-        <span>⚔️{stats.atk}</span><span>🛡️{stats.def}</span><span>💥{stats.crit}%</span>
-        {stats.lifesteal > 0 && <span>🩸{stats.lifesteal}%</span>}
-        {stats.double > 0 && <span>⚡連撃{stats.double}%</span>}
-        {thornsEffective(stats) > 0 && <span>🌵{thornsEffective(stats)}</span>}
-      </div>
+      {(() => {
+        const comboNow = player.cls === "assassin" ? (player.combo || 0) : 0;
+        const critChanceNow = stats.crit + comboNow * 4;
+        const doubleChanceNow = stats.double + comboNow * 2 + (player.doubleStack || 0);
+        return (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 11, color: "#78716c", margin: "8px 0 12px" }}>
+            <span>⚔️{stats.atk}</span><span>🛡️{stats.def}</span><span>💥{critDisplay(critChanceNow)}</span>
+            {stats.lifesteal > 0 && <span>🩸{stats.lifesteal}%</span>}
+            {doubleChanceNow > 0 && <span>⚡連撃{doubleDisplay(doubleChanceNow)}</span>}
+            {thornsEffective(stats) > 0 && <span>🌵{thornsEffective(stats)}</span>}
+          </div>
+        );
+      })()}
 
       {/* 操作 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
