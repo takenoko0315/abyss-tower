@@ -33,12 +33,36 @@ describe("attack damage", () => {
     })).toBe(18);
   });
 
+  it("keeps the exact 100% boundary and converts from 101%", () => {
+    expect(critOverflowBonus(100)).toBe(0);
+    expect(critOverflowBonus(101)).toBe(1);
+  });
+
+  it("does not apply critical overflow to a non-critical hit", () => {
+    expect(calculateAttackDamage({
+      attack: 10,
+      isCritical: false,
+      critDamage: 150,
+      critChance: 130,
+    })).toBe(10);
+  });
+
   it("keeps the existing tough and guard reductions", () => {
     expect(calculateAttackDamage({
       attack: 10,
       targetTough: true,
       targetGuarding: true,
     })).toBe(4);
+  });
+
+  it("preserves the legacy rounding order for crystalline and fragile targets", () => {
+    // Legacy order: round(5 * 1.1)=6, round(6 * 0.8)=5, round(5 * 1.5)=8.
+    expect(calculateAttackDamage({
+      attack: 5,
+      multiplier: 1.1,
+      crystallineMultiplier: 0.8,
+      targetFragile: true,
+    })).toBe(8);
   });
 });
 
@@ -59,7 +83,9 @@ describe("incoming damage", () => {
 describe("multi-hit overflow", () => {
   it("splits rates above 100% into guaranteed and overflow tiers", () => {
     expect(doubleTierChances(0)).toEqual([]);
+    expect(doubleTierChances(100)).toEqual([100]);
     expect(doubleTierChances(120)).toEqual([100, 20]);
+    expect(doubleTierChances(200)).toEqual([100, 100]);
     expect(doubleTierChances(220)).toEqual([100, 100, 20]);
   });
 
@@ -69,6 +95,20 @@ describe("multi-hit overflow", () => {
 
     const failsOverflow = [0.5, 0.3];
     expect(rollAdditionalHits(120, () => failsOverflow.shift())).toBe(1);
+  });
+
+  it("consumes one random value per attempted tier", () => {
+    let calls = 0;
+    const random = () => {
+      calls += 1;
+      return calls < 3 ? 0.5 : 0.3;
+    };
+    expect(rollAdditionalHits(220, random)).toBe(2);
+    expect(calls).toBe(3);
+
+    calls = 0;
+    expect(rollAdditionalHits(0, random)).toBe(0);
+    expect(calls).toBe(0);
   });
 });
 
@@ -91,5 +131,16 @@ describe("status effects", () => {
     const after = decrementStatusTurn(before, "burn");
     expect(after.burn).toEqual({ turns: 1, dmg: 6 });
     expect(before.burn.turns).toBe(2);
+  });
+
+  it("stops at zero and preserves unrelated statuses", () => {
+    const before = {
+      freeze: { turns: 1, dmg: 0 },
+      poison: { turns: 2, dmg: 5 },
+    };
+    const after = decrementStatusTurn(before, "freeze");
+    expect(after.freeze.turns).toBe(0);
+    expect(after.poison).toBe(before.poison);
+    expect(before.freeze.turns).toBe(1);
   });
 });
