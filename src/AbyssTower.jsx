@@ -1931,13 +1931,14 @@ export default function HackRoguelike() {
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
           SFX.levelup();
         } else {
-          setEnemy({ ...eAfterOwn }); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return;
+          setEnemy({ ...eAfterOwn }); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
-      if (eAfterOwn.hp <= 0) { setEnemy({ ...eAfterOwn }); afterKill(pp, eAfterOwn); return; }
+      if (eAfterOwn.hp <= 0) { setEnemy({ ...eAfterOwn }); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
       setEnemy({ ...eAfterOwn });
       setPlayer(pp);
       pushPlayerPopups(enemyHitLog, "dmg");
+      return { player: pp, enemy: eAfterOwn, terminal: false };
     });
   };
 
@@ -2003,13 +2004,14 @@ export default function HackRoguelike() {
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
           SFX.levelup();
         } else {
-          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return;
+          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
-      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); afterKill(pp, eAfterOwn); return; }
+      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
       setEnemy(eAfterOwn);
       setPlayer(pp);
       pushPlayerPopups(enemyHitLog, "dmg");
+      return { player: pp, enemy: eAfterOwn, terminal: false };
     });
   };
 
@@ -2064,13 +2066,14 @@ export default function HackRoguelike() {
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
           SFX.levelup();
         } else {
-          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return;
+          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
-      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); afterKill(pp, eAfterOwn); return; }
+      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
       setEnemy(eAfterOwn);
       setPlayer(pp);
       pushPlayerPopups(enemyHitLog, "dmg");
+      return { player: pp, enemy: eAfterOwn, terminal: false };
     });
   };
 
@@ -2124,13 +2127,14 @@ export default function HackRoguelike() {
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
           SFX.levelup();
         } else {
-          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return;
+          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
-      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); afterKill(pp, eAfterOwn); return; }
+      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
       setEnemy(eAfterOwn);
       setPlayer(pp);
       pushPlayerPopups(enemyHitLog, "dmg");
+      return { player: pp, enemy: eAfterOwn, terminal: false };
     });
   };
 
@@ -3021,16 +3025,20 @@ export default function HackRoguelike() {
   return (
     <div style={wrap}>
       {/* 戦闘演出用CSS(TASK-009): ダメージポップ・ヒットシェイク・被弾フラッシュ */}
+      {/* シェイク/フラッシュは同名keyframesの再生を検知させるため、a/bを交互に切り替える(keyによる強制remountは
+          ポップアップの非同期削除タイマーと競合しReactの"removeChild"エラーを起こすため使わない) */}
       <style>{`
         @keyframes abyss-float-up { 0% { transform: translate(-50%, 0); opacity: 1; } 100% { transform: translate(-50%, -42px); opacity: 0; } }
-        @keyframes abyss-shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
-        @keyframes abyss-flash-fade { 0% { opacity: 1; } 100% { opacity: 0; } }
+        @keyframes abyss-shake-a { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
+        @keyframes abyss-shake-b { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
+        @keyframes abyss-flash-fade-a { 0% { opacity: 1; } 100% { opacity: 0; } }
+        @keyframes abyss-flash-fade-b { 0% { opacity: 1; } 100% { opacity: 0; } }
       `}</style>
       {playerHitFx.nonce > 0 && (
-        <div key={playerHitFx.nonce} style={{
+        <div style={{
           position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999,
           boxShadow: playerHitFx.heavy ? "inset 0 0 90px 20px rgba(220,38,38,0.75)" : "inset 0 0 60px 12px rgba(220,38,38,0.5)",
-          animation: `abyss-flash-fade ${playerHitFx.heavy ? 0.5 : 0.35}s ease-out forwards`,
+          animation: `${playerHitFx.nonce % 2 === 0 ? "abyss-flash-fade-b" : "abyss-flash-fade-a"} ${playerHitFx.heavy ? 0.5 : 0.35}s ease-out forwards`,
         }} />
       )}
       {statusOverlay}
@@ -3076,7 +3084,7 @@ export default function HackRoguelike() {
 
       {/* 敵 */}
       {enemy && (
-        <div key={enemyHitFx} style={{ position: "relative", background: enemy.isFinal ? "#2a0a0a" : enemy.isBoss ? "#1c1007" : "#161210", border: `1px solid ${enemy.isFinal ? "#dc2626" : enemy.isBoss ? "#b45309" : "#292524"}`, boxShadow: enemy.isFinal ? "0 0 22px rgba(220,38,38,0.4)" : "none", borderRadius: 10, padding: 14, marginBottom: 12, textAlign: "center", animation: enemyHitFx > 0 ? "abyss-shake 0.35s ease-in-out" : "none" }}>
+        <div style={{ position: "relative", background: enemy.isFinal ? "#2a0a0a" : enemy.isBoss ? "#1c1007" : "#161210", border: `1px solid ${enemy.isFinal ? "#dc2626" : enemy.isBoss ? "#b45309" : "#292524"}`, boxShadow: enemy.isFinal ? "0 0 22px rgba(220,38,38,0.4)" : "none", borderRadius: 10, padding: 14, marginBottom: 12, textAlign: "center", animation: enemyHitFx > 0 ? `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out` : "none" }}>
           {enemyPopups.length > 0 && (
             <div style={{ position: "absolute", left: "50%", top: 6, width: 0, height: 0, pointerEvents: "none" }}>
               {enemyPopups.map(pop => (
