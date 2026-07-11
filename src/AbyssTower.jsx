@@ -2,8 +2,8 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, FINAL_BOSSES, ALL_BOSSES, PERKS, SKILLS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
 } from "./game/data.js";
-import { SFX, setSfxMuted } from "./game/sfx.js";
-import { playBgm, setBgmMuted } from "./game/bgm.js";
+import { SFX, setSfxMuted, setSfxVolume } from "./game/sfx.js";
+import { playBgm, setBgmMuted, setBgmVolume } from "./game/bgm.js";
 import { metaStorageLoad, metaStorageSave } from "./game/storage.js";
 import { rand, pick, effStats, hasNode, hasRelic } from "./game/utils.js";
 
@@ -345,6 +345,9 @@ export default function HackRoguelike() {
   const [soulsGained, setSoulsGained] = useState(0);
   const [victoryAwarded, setVictoryAwarded] = useState(false);
   const [muted, setMuted] = useState(false);
+  // BGM・効果音の個別音量(0〜100%)。TASK-011
+  const [bgmVolume, setBgmVolumeState] = useState(100);
+  const [sfxVolume, setSfxVolumeState] = useState(100);
   // 演出(ダメージポップ・ヒットシェイク・敵ターンの間)を減らす設定。TASK-009
   const [reducedFx, setReducedFx] = useState(false);
   const [turnPending, setTurnPending] = useState(false); // 「敵のターン…」の表示
@@ -354,8 +357,10 @@ export default function HackRoguelike() {
   const [playerHitFx, setPlayerHitFx] = useState({ nonce: 0, heavy: false }); // 画面端フラッシュ再生用
   const pendingTurnRef = useRef(null); // 演出待ちの敵ターン(連打時は即時フラッシュして解決する)
   const popupIdRef = useRef(0);
-  useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, codexRewards: [], ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); if (m.reducedFx) setReducedFx(true); } }); }, []);
+  useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, codexRewards: [], ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); if (m.reducedFx) setReducedFx(true); if (typeof m.bgmVolume === "number") setBgmVolumeState(m.bgmVolume); if (typeof m.sfxVolume === "number") setSfxVolumeState(m.sfxVolume); } }); }, []);
   useEffect(() => { setSfxMuted(muted); setBgmMuted(muted); }, [muted]);
+  useEffect(() => { setBgmVolume(bgmVolume / 100); }, [bgmVolume]);
+  useEffect(() => { setSfxVolume(sfxVolume / 100); }, [sfxVolume]);
   // アンマウント時、演出待ちの敵ターンが残っていればタイマーを掃除する
   useEffect(() => () => { if (pendingTurnRef.current) clearTimeout(pendingTurnRef.current.timer); }, []);
   // BGMはブラウザの自動再生制限があるため、ユーザー操作の中でplay()する必要がある。
@@ -419,6 +424,14 @@ export default function HackRoguelike() {
       setMeta(m => { const nm = { ...m, reducedFx: next }; metaStorageSave(nm); return nm; });
       return next;
     });
+  };
+  const changeBgmVolume = (v) => {
+    setBgmVolumeState(v);
+    setMeta(m => { const nm = { ...m, bgmVolume: v }; metaStorageSave(nm); return nm; });
+  };
+  const changeSfxVolume = (v) => {
+    setSfxVolumeState(v);
+    setMeta(m => { const nm = { ...m, sfxVolume: v }; metaStorageSave(nm); return nm; });
   };
 
   const awardSouls = (floorReached, killCount, cleared) => {
@@ -2396,6 +2409,18 @@ export default function HackRoguelike() {
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={toggleMute} style={{ background: "none", border: "1px solid #44403c", color: "#a8a29e", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{muted ? "🔇 サウンドOFF" : "🔊 サウンドON"}</button>
         <button onClick={toggleReducedFx} style={{ background: "none", border: "1px solid #44403c", color: "#a8a29e", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{reducedFx ? "🎬 演出OFF" : "🎬 演出ON"}</button>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, width: 220, marginTop: 12 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#a8a29e" }}>
+          <span style={{ width: 44, flexShrink: 0 }}>🎵BGM</span>
+          <input type="range" min="0" max="100" value={bgmVolume} onChange={e => changeBgmVolume(Number(e.target.value))} style={{ flex: 1 }} />
+          <span style={{ width: 34, textAlign: "right", flexShrink: 0 }}>{bgmVolume}%</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#a8a29e" }}>
+          <span style={{ width: 44, flexShrink: 0 }}>🔊効果音</span>
+          <input type="range" min="0" max="100" value={sfxVolume} onChange={e => changeSfxVolume(Number(e.target.value))} style={{ flex: 1 }} />
+          <span style={{ width: 34, textAlign: "right", flexShrink: 0 }}>{sfxVolume}%</span>
+        </label>
       </div>
     </div>
   );

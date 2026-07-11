@@ -4,6 +4,7 @@
 let AC = null;
 
 let SFX_MUTED = false;
+let SFX_VOLUME = 1; // 0〜1(スライダーの割合。既存の各音のvolに乗算する)
 
 function audioCtx() {
   if (typeof window === "undefined") return null;
@@ -22,7 +23,7 @@ function sTone({ freq = 440, type = "square", dur = 0.1, vol = 0.1, delay = 0, s
     const g = ctx.createGain();
     osc.type = type; osc.frequency.setValueAtTime(freq, t0);
     if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t0 + dur);
-    g.gain.setValueAtTime(vol, t0);
+    g.gain.setValueAtTime(vol * SFX_VOLUME, t0);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     osc.connect(g); g.connect(ctx.destination);
     osc.start(t0); osc.stop(t0 + dur + 0.02);
@@ -39,7 +40,7 @@ function sNoise({ dur = 0.08, vol = 0.12, delay = 0, freq = 800 }) {
     for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
     const src = ctx.createBufferSource(); src.buffer = buf;
     const f = ctx.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = freq;
-    const g = ctx.createGain(); g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    const g = ctx.createGain(); g.gain.setValueAtTime(vol * SFX_VOLUME, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     src.connect(f); f.connect(g); g.connect(ctx.destination);
     src.start(t0);
   } catch (e) { /* 無視 */ }
@@ -65,3 +66,4 @@ export const SFX = {
 };
 
 export function setSfxMuted(v) { SFX_MUTED = v; }
+export function setSfxVolume(v) { SFX_VOLUME = v; } // v: 0〜1
