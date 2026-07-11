@@ -83,3 +83,116 @@ export function decrementStatusTurn(status, type) {
     },
   };
 }
+
+export function resolvePlayerOngoingEffects({
+  player,
+  maxHp,
+  drainPerTurn = 0,
+}) {
+  let nextPlayer = {
+    ...player,
+    ...(player.pPoison ? { pPoison: { ...player.pPoison } } : {}),
+  };
+  const events = [];
+
+  if (drainPerTurn > 0 && nextPlayer.hp > 0) {
+    const damage = Math.max(1, Math.round(maxHp * drainPerTurn / 100));
+    nextPlayer = { ...nextPlayer, hp: nextPlayer.hp - damage };
+    events.push({ type: "damage", target: "player", source: "bloodBowl", value: damage });
+    if (nextPlayer.hp <= 0) {
+      return { nextPlayer, events, shouldStop: true, stopReason: "playerDead" };
+    }
+  }
+
+  if (nextPlayer.pPoison?.turns > 0) {
+    const damage = nextPlayer.pPoison.dmg;
+    nextPlayer = {
+      ...nextPlayer,
+      hp: nextPlayer.hp - damage,
+      pPoison: { ...nextPlayer.pPoison, turns: nextPlayer.pPoison.turns - 1 },
+    };
+    events.push({ type: "damage", target: "player", source: "poison", value: damage });
+    if (nextPlayer.hp <= 0) {
+      return { nextPlayer, events, shouldStop: true, stopReason: "playerDead" };
+    }
+  }
+
+  return { nextPlayer, events, shouldStop: false, stopReason: null };
+}
+
+export function resolveEnemyOngoingEffects({ enemy, burnRate = 0 }) {
+  let nextEnemy = {
+    ...enemy,
+    status: enemy.status
+      ? Object.fromEntries(Object.entries(enemy.status).map(([key, value]) => [key, { ...value }]))
+      : enemy.status,
+  };
+  const events = [];
+
+  if (nextEnemy.trait === "regen" && nextEnemy.hp > 0 && nextEnemy.hp < nextEnemy.maxHp) {
+    const heal = Math.max(1, Math.round(nextEnemy.maxHp * 0.06));
+    nextEnemy = { ...nextEnemy, hp: Math.min(nextEnemy.maxHp, nextEnemy.hp + heal) };
+    events.push({ type: "heal", target: "enemy", source: "regen", value: heal });
+  }
+
+  for (const status of ["poison", "bleed", "burn"]) {
+    if (!(nextEnemy.status?.[status]?.turns > 0)) continue;
+    const damage = status === "burn"
+      ? Math.max(1, Math.round(nextEnemy.maxHp * burnRate))
+      : nextEnemy.status[status].dmg;
+    nextEnemy = {
+      ...nextEnemy,
+      hp: nextEnemy.hp - damage,
+      status: decrementStatusTurn(nextEnemy.status, status),
+    };
+    events.push({ type: "damage", target: "enemy", source: status, value: damage });
+  }
+
+  if (nextEnemy.hp <= 0) {
+    return {
+      nextEnemy,
+      events,
+      shouldStop: true,
+      stopReason: "enemyDead",
+      incapacitated: false,
+    };
+  }
+
+  const incapacitatingStatuses = [];
+  for (const status of ["freeze", "stun"]) {
+    if (!(nextEnemy.status?.[status]?.turns > 0)) continue;
+    nextEnemy = { ...nextEnemy, status: decrementStatusTurn(nextEnemy.status, status) };
+    incapacitatingStatuses.push(status);
+    events.push({
+      type: "statusTurn",
+      target: "enemy",
+      source: status,
+      remainingTurns: nextEnemy.status[status].turns,
+    });
+  }
+  if (nextEnemy.status?.weaken?.turns > 0) {
+    nextEnemy = { ...nextEnemy, status: decrementStatusTurn(nextEnemy.status, "weaken") };
+    events.push({
+      type: "statusTurn",
+      target: "enemy",
+      source: "weaken",
+      remainingTurns: nextEnemy.status.weaken.turns,
+    });
+  }
+
+  const incapacitated = incapacitatingStatuses.length > 0;
+  if (incapacitated) {
+    events.push({
+      type: "incapacitated",
+      target: "enemy",
+      sources: incapacitatingStatuses,
+    });
+  }
+  return {
+    nextEnemy,
+    events,
+    shouldStop: incapacitated,
+    stopReason: incapacitated ? "incapacitated" : null,
+    incapacitated,
+  };
+}
