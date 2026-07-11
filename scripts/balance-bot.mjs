@@ -32,6 +32,7 @@ const BLESSING_FILTER = args.blessing || null; // 指定時はその祝福固定
 const KEYSTONE_NAMES = {
   ks_thorn: "茨の誓約", ks_blood: "血の渇望", ks_giant: "鈍重な巨人", ks_glass: "硝子の魂",
   ks_silence: "無音の誓い", ks_leaden: "鉛の鎧", ks_bloodbowl: "血染めの杯", ks_chaos: "深淵の賽",
+  ks_frenzy: "狂血の契約", ks_hourglass: "刻限の契約", ks_collector: "収集家の契約", ks_catalyst: "錬金の契約", // TASK-014
 };
 
 await main();

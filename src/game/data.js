@@ -42,6 +42,10 @@ export const BLESSINGS = [
   { key: "ks_leaden", icon: "🛡️", keystone: true, name: "鉛の鎧", desc: "【契約】連撃が一切出なくなる。代わりに受けるダメージ-18%", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), noDouble: 1, dmgReduce: 18 } }) },
   { key: "ks_bloodbowl", icon: "🥣", keystone: true, name: "血染めの杯", desc: "【契約】吸血+15%。だが毎ターン最大HPの3%を失い続ける", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), lifesteal: 15, drainPerTurn: 3 } }) },
   { key: "ks_chaos", icon: "🎲", keystone: true, name: "深淵の賽", desc: "【契約】与ダメも被ダメも、常に50%で1.5倍・50%で0.66倍になる", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), chaosDice: 1 } }) },
+  { key: "ks_frenzy", icon: "🩸", keystone: true, name: "狂血の契約", desc: "【契約】回復薬と焚き火の回復量が半分になる。代わりに常時与ダメ+10%、さらに失ったHP1%につき与ダメ+0.8%(最大+50%)", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), potionHalf: 1, restHalf: 1, flatDmg: 10, wrathHp: 1 } }) },
+  { key: "ks_hourglass", icon: "⏳", keystone: true, name: "刻限の契約", desc: "【契約】各戦闘の8ターン目以降、毎ターン最大HP5%の焦燥ダメージを受ける。代わりに与ダメ+25%(速攻ビルド強制)", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), hourglassContract: 1, flatDmg: 25 } }) },
+  { key: "ks_collector", icon: "🎒", keystone: true, name: "収集家の契約", desc: "【契約】最大HP-12%。代わりにランダムなレリックを1つ持って開始する", apply: p => { const cut = Math.round(p.maxHp * 0.12); return { ...p, maxHp: p.maxHp - cut, hp: Math.max(1, p.hp - cut), hooks: { ...(p.hooks || {}), startRandomRelic: 1 } }; } },
+  { key: "ks_catalyst", icon: "⚗️", keystone: true, name: "錬金の契約", desc: "【契約】回復薬の回復量が20%減る。代わりに回復薬を飲むと次の攻撃の与ダメが2倍になる(薬が攻撃資源になる)", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), potionCut20: 1, catalystContract: 1 } }) },
 ];
 // クラスの根幹と矛盾する契約は候補から除外する(選ぶ意味のない3択を防ぐ)
 export const KEYSTONE_EXCLUDE = {
@@ -319,6 +323,9 @@ export const ELITE_TRAITS = {
   regen: { name: "再生", icon: "💚", desc: "毎ターンHPが自動回復する", hpMult: 1, atkMult: 1 },
   resist: { name: "耐性", icon: "🧪", desc: "毒・炎上・凍結・気絶の効果時間が半分になる", hpMult: 1, atkMult: 1 },
   swift: { name: "俊敏", icon: "💨", desc: "反撃時に2回攻撃してくる", hpMult: 0.9, atkMult: 1 },
+  shellguard: { name: "甲殻", icon: "🛡️", desc: "戦闘開始時、最大HP20%のシールドを持つ(HPより先に削れる)", hpMult: 1, atkMult: 1 },
+  lastgasp: { name: "執念", icon: "💀", desc: "致死ダメージを1回だけ耐え、HP15%で踏みとどまる", hpMult: 1, atkMult: 1 },
+  stormy: { name: "荒れ狂い", icon: "🌀", desc: "行動抽選で連攻・大技の確率が高い", hpMult: 1, atkMult: 1 },
 };
 
 export const ELITE_TRAIT_KEYS = Object.keys(ELITE_TRAITS);
@@ -547,6 +554,13 @@ export const RELICS = [
   { key: "executioner_hourglass", name: "終焉の砂時計", icon: "⏳", desc: "敵HP15%以下への与ダメ +50%", stat: { executeBonus: 50 } },
   { key: "snowballblade", name: "加速する連撃", icon: "🌀", desc: "連撃が発生するたび、その戦闘中は連撃率+4%ずつ蓄積(最大+20%)", stat: { doubleSnowball: 4 } },
   { key: "critripple", name: "会心の波紋", icon: "💠", desc: "クリティカル時、15%の確率でもう1回攻撃が発生する", stat: { critRipple: 15 } },
+  // ===== 第2弾(TASK-014) =====
+  { key: "serratering", name: "鋸刃の指輪", icon: "🪚", desc: "出血威力 +40%", stat: { bleedPower: 40 } },
+  { key: "bloodscent", name: "血の匂い", icon: "👃", desc: "出血中の敵への与ダメ +20%", stat: { dmgVsBleed: 20 } },
+  { key: "ashcharm", name: "灰の護符", icon: "🌫️", desc: "攻撃命中時20%で衰弱を付与(2T)", stat: { weakenOnHit: 20 } },
+  { key: "guardianseal", name: "守り手の紋章", icon: "🛡️", desc: "防御系スキル(鉄壁・捌き・治癒・障壁の詠唱)のCD-1", stat: { guardCdCut: 1 } },
+  { key: "healerbag", name: "薬師の鞄", icon: "👜", desc: "素早飲みが1戦闘2回まで使える", flag: "quickDrinkExtra" },
+  { key: "whetstone", name: "研磨石", icon: "💎", desc: "クリ率 +8%・クリ倍率 +15%", stat: { crit: 8, critDmg: 15 } },
 ];
 
 export const RELIC_MAP = Object.fromEntries(RELICS.map(r => [r.key, r]));

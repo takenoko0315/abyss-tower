@@ -24,6 +24,9 @@ const getSkillCd = (key, mods) => {
   return Math.max(1, SKILLS[key].cd + (mod === "hasteMod" ? -1 : mod === "ampMod" ? 1 : 0) + (ACTIVE_ZONE.skillCdPenalty || 0)); // 静寂の書庫:CD+1
 };
 
+// 防御系スキル(守り手の紋章のCD短縮対象。TASK-014)
+const GUARD_SKILL_KEYS = ["ironguard", "deflect", "healchant", "barrierchant"];
+
 // balance bot(jsdom)またはwindow.__abyssTestFast===trueの時は演出の待ち時間を完全にゼロにする(TASK-009)
 const isTestFastEnv = () =>
   (typeof window !== "undefined" && window.__abyssTestFast === true) ||
@@ -174,6 +177,8 @@ function genEnemy(floor, elite = false, traitKey = null) {
   // ボスは固有の周期パターンで行動する(覚えれば完全に読める)
   if (isFinal) { e.pattern = base.pattern; e.patternIdx = 0; }
   else if (isBoss) { e.pattern = base.pattern || BOSS_PATTERNS[(Math.floor(floor / 5) - 1 + BOSS_PATTERNS.length) % BOSS_PATTERNS.length]; e.patternIdx = 0; }
+  // 甲殻(エリート特性):戦闘開始時、最大HP20%のシールドを持つ(HPより先に削れる)
+  if (trait === "shellguard") e.shield = Math.round(e.maxHp * 0.2);
   e.intent = rollIntent(e);
   return e;
 }
@@ -194,6 +199,15 @@ function rollIntent(e) {
   const r = Math.random();
   const canRoar = (e.atkBuff || 1) < 2.0; // 上限到達後は咆哮しない
   if (ACTIVE_ZONE.venomBias && r < 0.22) return "venom"; // 毒の沼:敵は毒撃を好む
+  // 荒れ狂い(エリート特性):連攻・大技の確率が高い(通常エリート比、heavy+flurryが38%→60%)
+  if (e.trait === "stormy") {
+    if (r < 0.2) return "attack";
+    if (r < 0.5) return "heavy";
+    if (r < 0.8) return "flurry";
+    if (r < 0.88) return "guard";
+    if (r < 0.94) return canRoar ? "roar" : "attack";
+    return "venom";
+  }
   if (e.isElite) {
     if (r < 0.34) return "attack";
     if (r < 0.58) return "heavy";
@@ -518,6 +532,12 @@ export default function HackRoguelike() {
         p.skills = [...p.skills, bless.learnSkill];
       }
     }
+    // 収集家の契約:所持済み以外からランダムなレリックを1つ持って開始
+    if (p.hooks?.startRandomRelic) {
+      const pool = RELICS.filter(r => !(p.relics || []).includes(r.key));
+      const startRelic = pick(pool);
+      if (startRelic) p.relics = [...(p.relics || []), startRelic.key];
+    }
     // 恒久アンロック(魂の祭壇)の効果を適用
     const mhp = metaOwned("mhp") * 12, matk = metaOwned("matk") * 3;
     p.maxHp += mhp; p.hp += mhp; p.atk += matk;
@@ -603,6 +623,18 @@ export default function HackRoguelike() {
     return tiers.map((t, i) => i === 0 ? `${t}%` : `(+${t}%)`).join("");
   };
 
+  // 敵へのダメージ適用共通処理。甲殻(shellguard)のシールドをHPより先に削る(TASK-014、プレイヤーの障壁と同じ考え方)
+  const dealDamageToEnemy = (e, dmg) => {
+    if (dmg <= 0) return;
+    if ((e.shield || 0) > 0) {
+      const absorbed = Math.min(e.shield, dmg);
+      e.shield -= absorbed;
+      dmg -= absorbed;
+      if (e.shield <= 0) addLog(`🛡️ ${e.name}のシールドが砕け散った！`, "info");
+    }
+    e.hp -= dmg;
+  };
+
   // 棘ダメージの共通処理(反応的発動・能動発動・スキル反撃モッドで共有)
   // スケーリング: 攻撃力加算(逆鱗)・防御力加算(鉄壁の棘)、防御中はdefendThornsMultが加算的に倍加(茨の心+反撃の大盾の重ねがけが効く)
   // さらに血染めの棘で会心、棘の女王で毒付与
@@ -612,7 +644,7 @@ export default function HackRoguelike() {
     let dmg = Math.round(base * (isDefending ? 1 + (stats.defendThornsMult || 0) : 1));
     let wasCrit = false;
     if (stats.thornsCrit > 0 && Math.random() * 100 < stats.thornsCrit) { dmg *= 2; wasCrit = true; }
-    e.hp -= dmg;
+    dealDamageToEnemy(e, dmg);
     if (stats.thornsPoison > 0 && dmg > 0) applyStatus(e, "poison", 2, Math.max(1, Math.round(dmg * 0.4)));
     if (wasCrit) addLog(`🥀 棘が会心の反撃！`, "dmg");
     return dmg;
@@ -629,6 +661,17 @@ export default function HackRoguelike() {
       p = { ...p, hp: p.hp - dr };
       addLog(`🥣 血染めの杯が命を啜る… ${dr}ダメージ`, "hurt");
       if (p.hp <= 0) return p;
+    }
+    // 刻限の契約(TASK-014):戦闘の8ターン目以降、毎ターン最大HP5%の焦燥ダメージ
+    if (stats.hourglassContract > 0 && p.hp > 0) {
+      const turnNo = (p.combatTurn || 0) + 1;
+      p = { ...p, combatTurn: turnNo };
+      if (turnNo >= 8) {
+        const burn = Math.max(1, Math.round(stats.maxHp * 0.05));
+        p = { ...p, hp: p.hp - burn };
+        addLog(`⏳ 刻限の契約が時を刻む… ${burn}ダメージ`, "hurt");
+        if (p.hp <= 0) return p;
+      }
     }
     // プレイヤーの毒(毒撃で付与される)を処理
     if (p.pPoison?.turns > 0) {
@@ -964,7 +1007,8 @@ export default function HackRoguelike() {
     if (p.fury) p = { ...p, fury: 0 };          // 闘志は戦闘毎にリセット
     if (p.doubleStack) p = { ...p, doubleStack: 0 }; // 加速する連撃の蓄積も戦闘毎にリセット
     if (p.healReduce) p = { ...p, healReduce: 0 };    // 腐敗による回復弱化も戦闘毎にリセット
-    if (p.quickDrinkUsed) p = { ...p, quickDrinkUsed: false }; // 素早飲みは戦闘毎に1回
+    if (p.quickDrinkCount) p = { ...p, quickDrinkCount: 0 }; // 素早飲みは戦闘毎にリセット(薬師の鞄で1戦闘2回まで)
+    if (p.combatTurn) p = { ...p, combatTurn: 0 };            // 刻限の契約のターン計測も戦闘毎にリセット
     if (p.petrified) p = { ...p, petrified: false };           // 石化も戦闘終了で解除
     // 暗殺者「影の相伝」: コンボを半分維持したまま持ち越す。なければ通常通り0に
     if (p.combo) p = { ...p, combo: hasNode(p, "a8") ? Math.floor(p.combo / 2) : 0 };
@@ -1195,7 +1239,7 @@ export default function HackRoguelike() {
 
   const chooseRoom = (room) => {
     if (room.key === "rest") {
-      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult") * (ACTIVE_MOD.restMult || 1));
+      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult") * (ACTIVE_MOD.restMult || 1) * (stats.restHalf > 0 ? 0.5 : 1));
       setPlayer(p => ({ ...p, hp: Math.min(stats.maxHp, p.hp + heal) }));
       addLog(`${floor}F:焚き火で休んだ (+${heal} HP)`, "heal");
       nextFloor();
@@ -1635,10 +1679,12 @@ export default function HackRoguelike() {
   const tickCds = (used = null, extraCut = 0) => {
     const castHaste = hasNode(player, "m8") && (player.resonance || 0) >= 2 ? 1 : 0; // 詠唱の加速
     const cdCut = (hasNode(player, "m4") ? 1 : 0) + (stats.cdAll > 0 ? 1 : 0) + castHaste + (ACTIVE_ZONE.playerCdCut || 0); // 連鎖詠唱+星読みの護符+詠唱の加速+星辰の観測所
+    // 守り手の紋章:防御系スキル(鉄壁・捌き・治癒・障壁の詠唱)のみさらにCD-1
+    const guardCut = used && stats.guardCdCut > 0 && GUARD_SKILL_KEYS.includes(used) ? stats.guardCdCut : 0;
     setCds(prev => {
       const n = {};
       for (const k of player.skills) n[k] = Math.max(0, (prev[k] || 0) - 1 - extraCut);
-      if (used) n[used] = Math.max(0, getSkillCd(used, player.skillMods) - cdCut - extraCut);
+      if (used) n[used] = Math.max(0, getSkillCd(used, player.skillMods) - cdCut - extraCut - guardCut);
       return n;
     });
   };
@@ -1691,6 +1737,9 @@ export default function HackRoguelike() {
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
     let p = { ...basePlayer };
     if (p.petrified) p = { ...p, petrified: false }; // 石化は攻撃行動で解ける
+    // 錬金の契約(TASK-014):回復薬直後の次の攻撃は与ダメ2倍(この一撃で消費)
+    const catalystBoost = !!p.nextAtkDouble;
+    if (catalystBoost) p.nextAtkDouble = false;
     const mod = usedSkill ? (player.skillMods || {})[usedSkill] : null;
     const baseHits = (spec.hits || 1) + (mod === "chainMod" ? 1 : 0);
     // 暗殺者「コンボ」: 1つにつきクリ率+4%・連撃率+2%
@@ -1763,6 +1812,9 @@ export default function HackRoguelike() {
       if (stats.flatDmg > 0) mult *= 1 + stats.flatDmg / 100;                // 契約:与ダメ固定強化
       if (stats.basicBonus > 0 && !usedSkill) mult *= 1 + stats.basicBonus / 100; // 無音の誓い:通常攻撃強化
       if (stats.chaosDice > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.66;    // 深淵の賽(契約)
+      if (catalystBoost) mult *= 2;                                          // 錬金の契約:回復薬直後の一撃
+      if (stats.wrathHp > 0) mult *= 1 + Math.min(50, Math.max(0, (1 - p.hp / stats.maxHp) * 100) * 0.8) / 100; // 狂血の契約:失ったHP1%につき+0.8%(最大+50%、TASK-014で0.5%/+35%から自主調整)
+      if (stats.dmgVsBleed > 0 && e.status?.bleed?.turns > 0) mult *= 1 + stats.dmgVsBleed / 100; // 血の匂い
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
       // クリ率100%超過分は1%につきクリ倍率+1%に変換(TASK-013)。トリガー経路によらず常時適用
@@ -1776,7 +1828,7 @@ export default function HackRoguelike() {
         addLog(`🪨 石の外殻が一撃を弾いた！(${stoneThresh}以上のダメージが必要)`, "info");
         continue;
       }
-      e.hp -= dmg;
+      dealDamageToEnemy(e, dmg);
       totalDmg += dmg;
       if (dmg > 0) hitLog.push({ dmg, crit: isCrit }); // ダメージポップ用(TASK-009)
       if (e.gimmick === "mirrorimg") e.mirrorStore = dmg; // 鏡霊:直前の一撃を記憶(次の敵ターンで跳ね返す)
@@ -1804,6 +1856,17 @@ export default function HackRoguelike() {
           bonus++;
           addLog(`💠 会心の波紋！もう1回攻撃できる`, "gold");
         }
+      }
+      // 灰の護符:攻撃命中時、確率で衰弱を付与
+      if (stats.weakenOnHit > 0 && dmg > 0 && e.hp > 0 && Math.random() * 100 < stats.weakenOnHit) {
+        applyStatus(e, "weaken", 2, 15 + (stats.weakenPower || 0));
+        addLog(`🌫️ 灰の護符が${e.name}の力を奪った…`, "dmg");
+      }
+      // 執念(エリート特性):致死ダメージを1回だけ耐え、HP15%で踏みとどまる
+      if (e.hp <= 0 && e.trait === "lastgasp" && !e.lastgaspUsed) {
+        e.hp = Math.max(1, Math.round(e.maxHp * 0.15));
+        e.lastgaspUsed = true;
+        addLog(`💀 ${e.name}が執念で踏みとどまった！(HP${e.hp})`, "info");
       }
       const hitTag = i >= baseHits ? "(連撃)" : baseHits > 1 ? `(${i + 1}撃目)` : "";
       addLog(`${label}${hitTag}！ ${isCrit ? "💥クリティカル " : ""}${dmg}ダメージ${e.guardTurns > 0 ? "(構えで軽減された)" : ""}`, "dmg");
@@ -2150,22 +2213,24 @@ export default function HackRoguelike() {
     const baseEnemy = flushed ? flushed.enemy : enemy;
     const saved = stats.potionSaveCh > 0 && Math.random() * 100 < stats.potionSaveCh; // 不朽の水筒
     let p = { ...basePlayer, potions: saved ? basePlayer.potions : basePlayer.potions - 1 };
-    const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * (1 - (p.healReduce || 0) / 100)));
+    const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * (stats.potionHalf > 0 ? 0.5 : stats.potionCut20 > 0 ? 0.8 : 1) * (1 - (p.healReduce || 0) / 100)));
     p.hp = Math.min(stats.maxHp, p.hp + heal);
     const cured = p.pPoison?.turns > 0;
     if (cured) p.pPoison = null; // 回復薬は毒も洗い流す
+    if (stats.catalystContract > 0) p.nextAtkDouble = true; // 錬金の契約:次の攻撃の与ダメ2倍
     SFX.potion();
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
     // ユニーク: 錬金術師の長靴(回復量と同じダメージを敵に)
     if (stats.potionBomb > 0) {
-      e.hp -= heal;
+      dealDamageToEnemy(e, heal);
       addLog(`🧪 劇薬の飛沫が${e.name}に${heal}ダメージ！`, "dmg");
       if (e.hp <= 0) { setEnemy({ ...e }); afterKill(p, e); return; }
     }
-    // 素早飲み:1戦闘に1回だけ、ターンを消費せずに飲める(演出不要・即時反映)
-    if (!p.quickDrinkUsed) {
-      p.quickDrinkUsed = true;
-      addLog(`⚡ 素早く回復薬を飲んだ！(+${heal} HP${cured ? "・毒も治った" : ""})ターンを消費しない(この戦闘ではもう素早く飲めない)${saved ? "♻️" : ""}`, "heal");
+    // 素早飲み:1戦闘に既定1回(薬師の鞄で2回)まで、ターンを消費せずに飲める(演出不要・即時反映)
+    const quickDrinkMax = 1 + (hasRelic(player, "quickDrinkExtra") ? 1 : 0);
+    if ((p.quickDrinkCount || 0) < quickDrinkMax) {
+      p.quickDrinkCount = (p.quickDrinkCount || 0) + 1;
+      addLog(`⚡ 素早く回復薬を飲んだ！(+${heal} HP${cured ? "・毒も治った" : ""})ターンを消費しない(残り${quickDrinkMax - p.quickDrinkCount}回)${saved ? "♻️" : ""}`, "heal");
       setEnemy({ ...e });
       setPlayer(p);
       pushPlayerPopups([{ dmg: heal }], "heal");
@@ -3232,7 +3297,7 @@ export default function HackRoguelike() {
             <div style={{ fontSize: 11, color: "#60a5fa", marginBottom: 4 }}>🤖 次のターンは充填で動けない</div>
           )}
           <Bar cur={enemy.hp} max={enemy.maxHp} color="#dc2626" />
-          <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>{Math.max(0, enemy.hp)} / {enemy.maxHp}　攻撃 {Math.round(enemy.atk * enemyAtkMult(enemy))}{enemyAtkMult(enemy) > 1 ? "↑" : ""}</div>
+          <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>{Math.max(0, enemy.hp)} / {enemy.maxHp}{enemy.shield > 0 && <span style={{ color: "#60a5fa" }}> 🛡️{enemy.shield}</span>}　攻撃 {Math.round(enemy.atk * enemyAtkMult(enemy))}{enemyAtkMult(enemy) > 1 ? "↑" : ""}</div>
           {/* 行動予告(インテント) */}
           {enemy.intent && (() => {
             const it = INTENTS[enemy.intent];
