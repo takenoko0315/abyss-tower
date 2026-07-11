@@ -338,6 +338,7 @@ export default function HackRoguelike() {
   const [runModKey, setRunModKey] = useState("none");
   const [currentEvent, setCurrentEvent] = useState(null);
   const [showStatus, setShowStatus] = useState(false);
+  const [openStat, setOpenStat] = useState(null); // ステータス画面のアコーディオン開閉。TASK-012
   const [best, setBest] = useState(0);
   const [pendingAscension, setPendingAscension] = useState([]);
   // メタ進行:魂と恒久アンロック(window.storageに永続保存)
@@ -2293,21 +2294,52 @@ export default function HackRoguelike() {
             )}
           </div>
         ) : <div style={{ marginBottom: 6 }} />}
-        <div style={{ background: "#161210", border: "1px solid #292524", borderRadius: 10, padding: 12, marginBottom: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "7px 18px", fontSize: 13 }}>
-          {[
-            ["⚔️ 攻撃力", stats.atk], ["🛡️ 防御力", stats.def], ["❤️ 最大HP", stats.maxHp], ["💥 クリ率", stats.crit + "%"], ["🔥 クリ倍率", stats.critDmg + "%"], ["🩸 吸血", stats.lifesteal + "%"], ["⚡ 連撃率", stats.double + "%"], ["🌵 棘", thornsEffective(stats)],
-            // シナジー系(積んでいる時だけ表示。0の人には出さない)
+        {(() => {
+          // 防御力の動的例:現在階の敵の平均的な攻撃力(genEnemyの雑魚用atk式を非破壊で再現)を軽減前後で示す
+          const defRawAtk = Math.round(6.5 * enemyScale(floor) * diffMultAt(floor, "atk") * (ACTIVE_MOD.enemyAtk || 1) * (ACTIVE_ZONE.enemyAtk || 1) * ascFx("enemyAtk"));
+          const defAfter = Math.max(1, defRawAtk - stats.def);
+          const CORE_STATS = [
+            { k: "atk", label: "⚔️ 攻撃力", v: stats.atk, desc: "与ダメージの基礎値。ここにスキルの倍率やクリティカル倍率など各種補正が掛け算される。" },
+            { k: "def", label: "🛡️ 防御力", v: stats.def, desc: `敵の攻撃力から固定値で引き算される(%軽減ではない)。最終ダメージは最低1保証。例:${floor}階の敵の攻撃なら約${defRawAtk}→${defAfter}に軽減` },
+            { k: "maxHp", label: "❤️ 最大HP", v: stats.maxHp, desc: "HPの上限値。0になると敗北になる。" },
+            { k: "crit", label: "💥 クリ率", v: stats.crit + "%", desc: "攻撃のたびに判定し、成功するとクリ倍率が乗算される(暗殺者はコンボ数×4%が上乗せ)。100%を超えた分は現状効果がない。" },
+            { k: "critDmg", label: "🔥 クリ倍率", v: stats.critDmg + "%", desc: "クリティカル発生時にダメージへ掛かる倍率。150%なら通常の1.5倍のダメージになる。" },
+            { k: "lifesteal", label: "🩸 吸血", v: stats.lifesteal + "%", desc: "与えたダメージの分だけHPを回復する(最低1)。吸血鬼クラスは上限を超えた回復分の2倍が「障壁」に変換される(上限は最大HPの25%、型Cは40%)。" },
+            { k: "double", label: "⚡ 連撃率", v: stats.double + "%", desc: "攻撃のたびに判定し、成功すると追加の1撃が発生する(暗殺者はコンボ数×2%が上乗せ)。100%を超えた分は現状効果がない。" },
+            { k: "thorns", label: "🌵 棘", v: thornsEffective(stats), desc: "被弾時・防御時に敵へ反射するダメージ。装備によっては攻撃力/防御力からもボーナスが加算され、防御中はさらに加算的に増加することがある。" },
+          ];
+          const SYNERGY_STATS = [
             ...(stats.poisonPower > 0 ? [["🟣 毒威力", stats.poisonPower + "%"]] : []),
             ...(stats.burnPower > 0 ? [["🔥 炎威力", stats.burnPower + "%"]] : []),
             ...(stats.bleedPower > 0 ? [["🩸 出血威力", stats.bleedPower + "%"]] : []),
             ...(stats.weakenPower > 0 ? [["🔻 衰弱威力", stats.weakenPower + "%"]] : []),
             ...(stats.dmgVsStatus > 0 ? [["🎯 対状態異常", stats.dmgVsStatus + "%"]] : []),
-          ].map(([k, v]) => (
-            <div key={k} style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "#a8a29e" }}>{k}</span><span style={{ fontWeight: 700 }}>{v}</span>
+          ];
+          return (
+            <div style={{ background: "#161210", border: "1px solid #292524", borderRadius: 10, padding: 12, marginBottom: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "7px 18px", fontSize: 13 }}>
+              {CORE_STATS.flatMap(({ k, label, v, desc }) => {
+                const isOpen = openStat === k;
+                const row = (
+                  <div key={k} onClick={() => setOpenStat(isOpen ? null : k)}
+                    style={{ display: "flex", justifyContent: "space-between", cursor: "pointer" }}>
+                    <span style={{ color: "#a8a29e" }}>{label} <span style={{ color: "#57534e", fontSize: 10 }}>{isOpen ? "▲" : "▼"}</span></span><span style={{ fontWeight: 700 }}>{v}</span>
+                  </div>
+                );
+                if (!isOpen) return [row];
+                return [row, (
+                  <div key={k + "-desc"} style={{ gridColumn: "1 / -1", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, padding: "7px 9px", fontSize: 11.5, color: "#d6d3d1", lineHeight: 1.5, marginTop: -3 }}>
+                    {desc}
+                  </div>
+                )];
+              })}
+              {SYNERGY_STATS.map(([k, v]) => (
+                <div key={k} style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#a8a29e" }}>{k}</span><span style={{ fontWeight: 700 }}>{v}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          );
+        })()}
         <div style={{ color: "#fbbf24", fontWeight: 700, fontSize: 14, marginBottom: 6 }}>
           レリック <span style={{ color: "#78716c", fontWeight: 400, fontSize: 12 }}>({(player.relics || []).length}/{RELIC_CAP}枠・全{RELICS.length}種)</span>
         </div>
@@ -2397,7 +2429,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.48 — 戦闘演出の追加</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.49 — ステータス説明の追加</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
