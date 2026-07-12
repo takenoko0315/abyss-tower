@@ -2444,6 +2444,27 @@ export default function HackRoguelike() {
       pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices,
       drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
     };
+    // Playwright監査専用。開発ビルドでのみ公開し、実際のUI操作とゲーム処理を決定論的な状態から検証する。
+    window.__abyssE2E = {
+      startContractRun: (contract) => startRun("warrior", "normal", contract, "none", "a", null, []),
+      patchPlayer: (patch) => setPlayer(current => ({
+        ...current,
+        ...patch,
+        hooks: patch.hooks ? { ...(current.hooks || {}), ...patch.hooks } : current.hooks,
+      })),
+      patchEnemy: (patch) => setEnemy(current => current ? {
+        ...current,
+        ...patch,
+        status: patch.status ? { ...patch.status } : current.status,
+      } : current),
+      runEnemyTurn: () => {
+        const nextEnemy = { ...enemy, status: enemy?.status ? { ...enemy.status } : undefined };
+        const nextPlayer = enemyTurn({ ...player }, nextEnemy);
+        setPlayer(nextPlayer);
+        setEnemy(nextEnemy);
+      },
+      relicCap: RELIC_CAP,
+    };
   }
 
   // ===== タイトル =====
@@ -3337,7 +3358,7 @@ export default function HackRoguelike() {
         const skillOnlyNotes = stats.noSkill > 0 ? [] : skillInfo.notes.filter(n => !atkInfo.notes.includes(n));
         if (Math.abs(atkInfo.mult - 1) < 0.001 && atkInfo.notes.length === 0 && skillOnlyNotes.length === 0) return null;
         return (
-          <div style={{ fontSize: 12, color: "#fbbf24", background: "#1c1917", border: "1px solid #44403c", borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
+          <div data-testid="attack-multiplier" data-multiplier={atkInfo.mult.toFixed(4)} style={{ fontSize: 12, color: "#fbbf24", background: "#1c1917", border: "1px solid #44403c", borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
             <span style={{ fontWeight: 700 }}>⚔️ 現在の与ダメ倍率:×{atkInfo.mult.toFixed(2)}</span>
             {!(stats.noSkill > 0) && <span style={{ color: "#78716c" }}>(通常攻撃基準・スキルは別途スキル自身の倍率が乗る)</span>}
             {atkInfo.notes.length > 0 && <div style={{ color: "#a8a29e", marginTop: 2 }}>内訳:{atkInfo.notes.join("・")}</div>}
