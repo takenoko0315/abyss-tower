@@ -49,7 +49,22 @@ export function attackOnlyPolicy() {
 }
 
 /**
- * 2. basic: HP危険域で回復薬、大技/連攻の予告に防御、敵防御中に有効なスキルがあれば使用。
+ * 2. greedy: 深く考えずに遊ぶ人間を想定した雑な方針。基本は通常攻撃、HP危険域で回復薬、
+ * 使えるスキルがあれば(倍率計算などせず)手近なものを使う。敵の予告・防御・ギミックは一切見ない。
+ */
+export function greedyPolicy(d) {
+  const { player, stats, cds } = d;
+  const hpPct = player.hp / stats.maxHp;
+  if (hpPct <= 0.3 && player.potions > 0) return { action: "potion" };
+
+  const usable = usableSkillsOfKind(player, cds, stats, DAMAGE_SKILLS);
+  if (usable.length) return { action: "skill", skillKey: usable[0] };
+
+  return { action: "attack" };
+}
+
+/**
+ * 3. basic: HP危険域で回復薬、大技/連攻の予告に防御、敵防御中に有効なスキルがあれば使用。
  * それ以外は通常攻撃。
  */
 export function basicPolicy(d) {
@@ -70,7 +85,7 @@ export function basicPolicy(d) {
 }
 
 /**
- * 3. strategic: 敵の予告行動・双方のHP・回復薬・使用可能スキル・状態異常・敵ギミック・現在の契約を
+ * 4. strategic: 敵の予告行動・双方のHP・回復薬・使用可能スキル・状態異常・敵ギミック・現在の契約を
  * 考慮するルールベース方針。完璧なAIではなく、basicより一段高度な優先順位付けを行う。
  */
 export function strategicPolicy(d) {
@@ -126,6 +141,7 @@ export function strategicPolicy(d) {
 
 export const POLICIES = {
   "attack-only": attackOnlyPolicy,
+  greedy: greedyPolicy,
   basic: basicPolicy,
   strategic: strategicPolicy,
 };

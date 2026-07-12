@@ -27,7 +27,11 @@ const WORKERS = Math.max(1, Math.min(RUNS, parseInt(args.workers || String(os.cp
 const CLASS_FILTER = args.class || null;
 const BLESSING_FILTER = args.blessing || null;
 const BASE_SEED = parseInt(args.seed || "1", 10);
-const POLICIES = (args.policies || "attack-only,basic,strategic").split(",").map(s => s.trim()).filter(Boolean);
+const POLICIES = (args.policies || "attack-only,greedy,basic,strategic").split(",").map(s => s.trim()).filter(Boolean);
+// ペア比較の対象。既定はPOLICIES内で隣り合う組(=一段階だけ判断を高度にした差分)
+const PAIRS = args.pairs
+  ? args.pairs.split(",").map(s => s.trim().split(":")).filter(([a, b]) => a && b)
+  : POLICIES.slice(1).map((p, i) => [POLICIES[i], p]);
 const OUT_PREFIX = args.out || path.join(PROJECT_ROOT, "scripts", "out", `combat-decision-${new Date().toISOString().replace(/[:.]/g, "-")}`);
 
 const KEYSTONE_NAMES = {
@@ -58,8 +62,12 @@ async function main() {
   const totalSec = ((Date.now() - t1) / 1000).toFixed(1);
 
   const summaries = Object.fromEntries(POLICIES.map(p => [p, summarize(byPolicy[p])]));
+  const pairStats = Object.fromEntries(
+    PAIRS.filter(([a, b]) => byPolicy[a] && byPolicy[b]).map(([a, b]) => [`${a}_vs_${b}`, pairComparison(byPolicy[a], byPolicy[b])]),
+  );
   printComparisonReport(summaries, totalSec, buildSec);
-  writeOutputs(byPolicy, summaries);
+  printPairReport(pairStats);
+  writeOutputs(byPolicy, summaries, pairStats);
 
   const anyError = POLICIES.some(p => byPolicy[p].some(r => r.result === "error"));
   process.exit(anyError ? 1 : 0);
@@ -219,6 +227,36 @@ function summarize(results) {
   };
 }
 
+// 同一シードのランどうしを突き合わせ、到達階の差を集計する(全ラン平均だけでは見えない
+// 「どのくらいの割合で上回るか」「差のばらつき」を見るため)。CIは対応のある差の平均に対する
+// 正規近似(母集団の分布形状に依らずCLTにより妥当、n=100〜300程度を想定)。
+function pairComparison(resultsA, resultsB) {
+  const bySeedA = new Map(resultsA.map(r => [r.seed, r]));
+  const bySeedB = new Map(resultsB.map(r => [r.seed, r]));
+  const diffs = [];
+  for (const [seed, a] of bySeedA) {
+    const b = bySeedB.get(seed);
+    if (!b) continue;
+    diffs.push((b.floor || 0) - (a.floor || 0));
+  }
+  const n = diffs.length;
+  if (n === 0) return { n: 0, pairedSeeds: 0 };
+  const wins = diffs.filter(d => d > 0).length;
+  const ties = diffs.filter(d => d === 0).length;
+  const losses = diffs.filter(d => d < 0).length;
+  const mean = diffs.reduce((a, b) => a + b, 0) / n;
+  const med = median(diffs);
+  const variance = n > 1 ? diffs.reduce((a, d) => a + (d - mean) ** 2, 0) / (n - 1) : 0;
+  const sd = Math.sqrt(variance);
+  const stderr = sd / Math.sqrt(n);
+  return {
+    n, wins, ties, losses,
+    winRate: wins / n, tieRate: ties / n, lossRate: losses / n,
+    meanDiff: mean, medianDiff: med, sd,
+    ci95: [mean - 1.96 * stderr, mean + 1.96 * stderr],
+  };
+}
+
 // ===== レポート出力 =====
 function printComparisonReport(summaries, totalSec, buildSec) {
   console.log(`\n===== 深淵の塔 戦闘判断価値ベースライン (${RUNS}ラン×${Object.keys(summaries).length}方針・難易度:${DIFF_NAME}) =====`);
@@ -270,13 +308,28 @@ function printComparisonReport(summaries, totalSec, buildSec) {
   console.log("");
 }
 
-function writeOutputs(byPolicy, summaries) {
+function printPairReport(pairStats) {
+  const entries = Object.entries(pairStats);
+  if (!entries.length) return;
+  console.log(`===== ペア比較(同一シードでの到達階差) =====`);
+  for (const [label, s] of entries) {
+    if (!s.n) { console.log(`[${label}] 突き合わせ可能なシードが無い`); continue; }
+    const [a, b] = label.split("_vs_");
+    console.log(`[${a} → ${b}] n=${s.n}`);
+    console.log(`  上回った割合: ${(s.winRate * 100).toFixed(1)}%  同率: ${(s.tieRate * 100).toFixed(1)}%  下回った割合: ${(s.lossRate * 100).toFixed(1)}%`);
+    console.log(`  平均差: ${s.meanDiff.toFixed(2)}F  中央値差: ${s.medianDiff.toFixed(1)}F  95%CI: [${s.ci95[0].toFixed(2)}, ${s.ci95[1].toFixed(2)}]F`);
+  }
+  console.log("");
+}
+
+function writeOutputs(byPolicy, summaries, pairStats) {
   fs.mkdirSync(path.dirname(OUT_PREFIX), { recursive: true });
   const jsonPath = `${OUT_PREFIX}.json`;
   const csvPath = `${OUT_PREFIX}.csv`;
   fs.writeFileSync(jsonPath, JSON.stringify({
     meta: { runs: RUNS, diff: DIFF_NAME, class: CLASS_FILTER, blessing: BLESSING_FILTER, seed: BASE_SEED, policies: Object.keys(summaries) },
     summaries,
+    pairStats,
     results: byPolicy,
   }, null, 2));
 

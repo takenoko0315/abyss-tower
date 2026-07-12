@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attackOnlyPolicy, basicPolicy, strategicPolicy } from "./combat-policies.mjs";
+import { attackOnlyPolicy, greedyPolicy, basicPolicy, strategicPolicy } from "./combat-policies.mjs";
 
 // テスト用の最小限の状態を組み立てるヘルパー
 function makeState({
@@ -23,6 +23,53 @@ describe("attackOnlyPolicy", () => {
   it("敵が大技を予告していても防御しない", () => {
     const state = makeState({ enemy: { intent: "heavy", hp: 50, maxHp: 100, guardTurns: 0, status: {} } });
     expect(attackOnlyPolicy(state)).toEqual({ action: "attack" });
+  });
+});
+
+describe("greedyPolicy", () => {
+  it("HPが30%以下で回復薬があれば回復する", () => {
+    const state = makeState({ hp: 25, maxHp: 100, potions: 1 });
+    expect(greedyPolicy(state)).toEqual({ action: "potion" });
+  });
+
+  it("HPが30%以下でも回復薬がなければスキル/攻撃に進む", () => {
+    const state = makeState({ hp: 25, maxHp: 100, potions: 0 });
+    expect(greedyPolicy(state)).not.toEqual({ action: "potion" });
+  });
+
+  it("使用可能なスキルがあれば倍率計算せず先頭のものを使う", () => {
+    const state = makeState({
+      hp: 90, skills: ["flamestrike", "strike"], cds: { flamestrike: 0, strike: 0 },
+    });
+    // strikeの方が倍率は高い(2.2>1.5)が、greedyは並び順の先頭(flamestrike)をそのまま使う
+    expect(greedyPolicy(state)).toEqual({ action: "skill", skillKey: "flamestrike" });
+  });
+
+  it("敵が大技を予告していても防御しない", () => {
+    const state = makeState({ hp: 90, enemy: { intent: "heavy", hp: 50, maxHp: 100, guardTurns: 0, status: {} } });
+    expect(greedyPolicy(state)).toEqual({ action: "attack" });
+  });
+
+  it("敵が防御中でも気にせず通常攻撃(スキルが無ければ)", () => {
+    const state = makeState({ hp: 90, enemy: { intent: "attack", hp: 50, maxHp: 100, guardTurns: 1, status: {} } });
+    expect(greedyPolicy(state)).toEqual({ action: "attack" });
+  });
+
+  it("敵の毒牙ギミックを考慮せず通常攻撃", () => {
+    const state = makeState({
+      hp: 90, enemy: { intent: "venom", hp: 50, maxHp: 100, guardTurns: 0, status: {}, gimmick: "venomfang" },
+    });
+    expect(greedyPolicy(state)).toEqual({ action: "attack" });
+  });
+
+  it("石化中はスキルが使用不可扱いになり通常攻撃になる", () => {
+    const state = makeState({ hp: 90, petrified: true, skills: ["strike"], cds: { strike: 0 } });
+    expect(greedyPolicy(state)).toEqual({ action: "attack" });
+  });
+
+  it("スキルがクールダウン中なら通常攻撃", () => {
+    const state = makeState({ hp: 90, skills: ["strike"], cds: { strike: 2 } });
+    expect(greedyPolicy(state)).toEqual({ action: "attack" });
   });
 });
 
