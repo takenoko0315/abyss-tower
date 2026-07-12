@@ -2270,7 +2270,7 @@ export default function HackRoguelike() {
 
   const SLOT_NAMES = Object.fromEntries(SLOT_KEYS.map(k => [k, SLOTS[k].name]));
   const statusBtn = (
-    <button onClick={() => setShowStatus(true)}
+    <button data-testid="status-button" onClick={() => setShowStatus(true)}
       style={{ background: "#1c1917", border: "1px solid #44403c", color: "#fbbf24", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>
       📊 ステータス
     </button>
@@ -2278,7 +2278,7 @@ export default function HackRoguelike() {
 
   // ラン中どの画面でも右上からステータスを開ける固定ボタン
   const statusFab = (
-    <button onClick={() => setShowStatus(true)}
+    <button data-testid="status-button" onClick={() => setShowStatus(true)}
       style={{ position: "fixed", top: 12, right: 12, zIndex: 40, background: "#1c1917", border: "1px solid #57534e", color: "#e7e5e4", borderRadius: 8, padding: "7px 12px", fontSize: 14, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(0,0,0,0.5)" }}>📊</button>
   );
   const statusOverlay = !showStatus ? null : (
@@ -2444,6 +2444,36 @@ export default function HackRoguelike() {
       pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices,
       drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
     };
+    if (window.__abyssTestFast === true) {
+      const allowedContracts = ["ks_frenzy", "ks_collector", "ks_catalyst"];
+      const selectPatch = (patch, allowed) => Object.fromEntries(
+        allowed.filter(key => Object.hasOwn(patch, key)).map(key => [key, patch[key]]),
+      );
+      // Playwright監査専用。テストフラグがある開発ビルドだけで、必要な状態項目に限定して公開する。
+      window.__abyssE2E = {
+        startContractRun: (contract) => {
+          if (!allowedContracts.includes(contract)) throw new Error("unsupported E2E contract");
+          startRun("warrior", "normal", contract, "none", "a", null, []);
+        },
+        patchPlayer: (patch) => setPlayer(current => ({
+          ...current,
+          ...selectPatch(patch, ["hp", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance"]),
+        })),
+        patchEnemy: (patch) => setEnemy(current => current ? {
+          ...current,
+          ...selectPatch(patch, ["hp", "maxHp", "atk", "trait", "gimmick", "guardTurns", "status", "intent"]),
+        } : current),
+        runEnemyTurn: () => {
+          const nextEnemy = { ...enemy, status: enemy?.status ? { ...enemy.status } : undefined };
+          const nextPlayer = enemyTurn({ ...player }, nextEnemy);
+          setPlayer(nextPlayer);
+          setEnemy(nextEnemy);
+        },
+        relicCap: RELIC_CAP,
+      };
+    } else {
+      delete window.__abyssE2E;
+    }
   }
 
   // ===== タイトル =====
@@ -3304,9 +3334,9 @@ export default function HackRoguelike() {
 
       {/* 操作 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <button onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={btnStyle(false)}>⚔️ 攻撃</button>
+        <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={btnStyle(false)}>⚔️ 攻撃</button>
         <button onClick={useDefend} disabled={stats.noDefend > 0 || player.petrified} style={btnStyle(stats.noDefend > 0 || player.petrified, "#1e40af")}>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</button>
-        <button onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={btnStyle(player.potions <= 0 || player.petrified, "#166534")}>
+        <button data-testid="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={btnStyle(player.potions <= 0 || player.petrified, "#166534")}>
           🧪 ×{player.potions}
         </button>
       </div>
@@ -3337,7 +3367,7 @@ export default function HackRoguelike() {
         const skillOnlyNotes = stats.noSkill > 0 ? [] : skillInfo.notes.filter(n => !atkInfo.notes.includes(n));
         if (Math.abs(atkInfo.mult - 1) < 0.001 && atkInfo.notes.length === 0 && skillOnlyNotes.length === 0) return null;
         return (
-          <div style={{ fontSize: 12, color: "#fbbf24", background: "#1c1917", border: "1px solid #44403c", borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
+          <div data-testid="attack-multiplier" data-multiplier={atkInfo.mult.toFixed(4)} style={{ fontSize: 12, color: "#fbbf24", background: "#1c1917", border: "1px solid #44403c", borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
             <span style={{ fontWeight: 700 }}>⚔️ 現在の与ダメ倍率:×{atkInfo.mult.toFixed(2)}</span>
             {!(stats.noSkill > 0) && <span style={{ color: "#78716c" }}>(通常攻撃基準・スキルは別途スキル自身の倍率が乗る)</span>}
             {atkInfo.notes.length > 0 && <div style={{ color: "#a8a29e", marginTop: 2 }}>内訳:{atkInfo.notes.join("・")}</div>}

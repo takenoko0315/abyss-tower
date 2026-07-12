@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "vitest run",
+    "test": "vitest run --exclude=e2e/**",
+    "test:e2e": "playwright test",
+    "test:e2e:repeat": "playwright test --repeat-each=3",
     "balance": "node scripts/balance-bot.mjs",
-    "check": "oxlint && vitest run && vite build",
+    "check": "oxlint && vitest run --exclude=e2e/** && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.17",
