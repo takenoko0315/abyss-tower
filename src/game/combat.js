@@ -121,12 +121,12 @@ export function resolvePlayerOngoingEffects({
 }
 
 export function resolveEnemyOngoingEffects({ enemy, burnRate = 0 }) {
-  let nextEnemy = {
-    ...enemy,
-    status: enemy.status
-      ? Object.fromEntries(Object.entries(enemy.status).map(([key, value]) => [key, { ...value }]))
-      : enemy.status,
-  };
+  let nextEnemy = { ...enemy };
+  if (enemy.status) {
+    nextEnemy.status = Object.fromEntries(
+      Object.entries(enemy.status).map(([key, value]) => [key, { ...value }]),
+    );
+  }
   const events = [];
 
   if (nextEnemy.trait === "regen" && nextEnemy.hp > 0 && nextEnemy.hp < nextEnemy.maxHp) {

@@ -87,6 +87,11 @@ describe("enemy ongoing effects", () => {
     });
     expect(result.nextEnemy.hp).toBe(-8);
     expect(result.events.map(event => event.source)).toEqual(["poison", "bleed", "burn"]);
+    expect(result.nextEnemy.status).toMatchObject({
+      poison: { turns: 0 },
+      bleed: { turns: 0 },
+      burn: { turns: 0 },
+    });
     expect(result.nextEnemy.status.freeze.turns).toBe(2);
     expect(result).toMatchObject({ shouldStop: true, stopReason: "enemyDead" });
   });
@@ -124,11 +129,11 @@ describe("enemy ongoing effects", () => {
         hp: 30,
         maxHp: 30,
         status: {
-          poison: { turns: 0, dmg: 99 },
+          poison: { turns: -1, dmg: 99 },
           bleed: { turns: 0, dmg: 99 },
-          burn: { turns: 0, dmg: 0 },
+          burn: { turns: -2, dmg: 0 },
           freeze: { turns: 0, dmg: 0 },
-          stun: { turns: 0, dmg: 0 },
+          stun: { turns: -1, dmg: 0 },
           weaken: { turns: 0, dmg: 20 },
         },
       },
@@ -147,8 +152,8 @@ describe("enemy ongoing effects", () => {
       trait: "regen",
       status: Object.freeze({ poison: Object.freeze({ turns: 1, dmg: 2 }) }),
     });
-    resolvePlayerOngoingEffects({ player, maxHp: 20, drainPerTurn: 3 });
-    resolveEnemyOngoingEffects({ enemy, burnRate: 0.06 });
+    const playerResult = resolvePlayerOngoingEffects({ player, maxHp: 20, drainPerTurn: 3 });
+    const enemyResult = resolveEnemyOngoingEffects({ enemy, burnRate: 0.06 });
     expect(player).toEqual({ hp: 20, pPoison: { turns: 2, dmg: 3 } });
     expect(enemy).toEqual({
       hp: 20,
@@ -156,5 +161,15 @@ describe("enemy ongoing effects", () => {
       trait: "regen",
       status: { poison: { turns: 1, dmg: 2 } },
     });
+    expect(playerResult.nextPlayer.pPoison).not.toBe(player.pPoison);
+    expect(enemyResult.nextEnemy.status).not.toBe(enemy.status);
+    expect(enemyResult.nextEnemy.status.poison).not.toBe(enemy.status.poison);
+  });
+
+  it("preserves the enemy object shape when status is absent", () => {
+    const enemy = { hp: 30, maxHp: 30, name: "shape-check" };
+    const result = resolveEnemyOngoingEffects({ enemy });
+    expect(Object.hasOwn(result.nextEnemy, "status")).toBe(false);
+    expect(result.nextEnemy).toEqual(enemy);
   });
 });
