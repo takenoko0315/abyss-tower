@@ -584,6 +584,8 @@ export default function HackRoguelike() {
     if (stats.bossSlayer > 0 && enemy && (enemy.isBoss || enemy.isElite)) { mult *= 1 + stats.bossSlayer / 100; notes.push(`王殺し+${stats.bossSlayer}%`); }
     if (stats.executeBonus > 0 && enemy && enemy.hp / enemy.maxHp <= 0.15) { mult *= 1 + stats.executeBonus / 100; notes.push(`終焉+${stats.executeBonus}%`); }
     if (stats.flatDmg > 0) { mult *= 1 + stats.flatDmg / 100; notes.push(`与ダメ強化+${stats.flatDmg}%`); }
+    const frenzyMult = frenzyDamageMultiplier(player.hp, stats.maxHp, stats.wrathHp > 0);
+    if (frenzyMult > 1) { mult *= frenzyMult; notes.push(`狂血・失HP+${Math.round((frenzyMult - 1) * 1000) / 10}%`); }
     if (!forSkill && stats.basicBonus > 0) { mult *= 1 + stats.basicBonus / 100; notes.push(`無音の誓い+${stats.basicBonus}%`); }
     if (stats.chaosDice > 0) notes.push("深淵の賽:さらに変動(×1.5 or ×0.66)");
     if (stats.gambleDmg > 0) notes.push("気まぐれな打撃:さらに変動(×1.5 or ×0.7)");
@@ -846,8 +848,9 @@ export default function HackRoguelike() {
     // 輸血の契約: HPが25%以下になったら自動で回復薬を1つ消費(ラン中の残り回数まで)
     if (p.hp > 0 && (p.autoPotionLeft || 0) > 0 && p.potions > 0 && p.hp / stats.maxHp <= 0.25) {
       const saved = stats.potionSaveCh > 0 && Math.random() * 100 < stats.potionSaveCh; // 不朽の水筒
-      const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * (1 - (p.healReduce || 0) / 100)));
+      const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * potionHealingMultiplier(stats) * (1 - (p.healReduce || 0) / 100)));
       p = { ...p, hp: Math.min(stats.maxHp, p.hp + heal), potions: saved ? p.potions : p.potions - 1, autoPotionLeft: p.autoPotionLeft - 1 };
+      if (stats.catalystContract > 0) p.nextAtkDouble = true;
       addLog(`💉 輸血の契約が発動！回復薬が自動で使われた(+${heal} HP、残り${p.autoPotionLeft}回)${saved ? "♻️" : ""}`, "heal");
     }
     return p;

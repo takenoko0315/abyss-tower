@@ -46,8 +46,12 @@ describe("TASK-014 contracts", () => {
   };
 
   it("configures frenzy with its flat and missing-HP damage bonuses", () => {
-    const player = applyContract("ks_frenzy");
+    const contract = BLESSINGS.find(blessing => blessing.key === "ks_frenzy");
+    const player = contract.apply({ maxHp: 100, hp: 80, relics: [], hooks: {} });
     expect(player.hooks).toMatchObject({ flatDmg: 10, wrathHp: 1 });
+    expect(contract.desc).toContain("常時与ダメ+10%");
+    expect(contract.desc).toContain("失ったHP1%につき与ダメ+0.8%");
+    expect(contract.desc).toContain("最大+50%");
   });
 
   it("reduces collector max HP by 12% and requests one starting relic without raising the cap", () => {
