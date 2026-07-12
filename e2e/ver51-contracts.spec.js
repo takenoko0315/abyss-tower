@@ -43,7 +43,7 @@ async function patchCombat(page, playerPatch) {
 
 async function attackDamage(page) {
   const before = (await debugState(page)).enemy.hp;
-  await page.getByRole("button", { name: "⚔️ 攻撃", exact: true }).click();
+  await page.getByTestId("attack-button").click();
   await expect.poll(async () => (await debugState(page)).enemy.hp).toBeLessThan(before);
   return before - (await debugState(page)).enemy.hp;
 }
@@ -62,6 +62,11 @@ async function resetEnemy(page) {
   }).toEqual([1000, 0, "roar"]);
 }
 
+test("通常の開発プレイではE2E状態変更APIを公開しない", async ({ page }) => {
+  await page.goto("/");
+  expect(await page.evaluate(() => typeof window.__abyssE2E)).toBe("undefined");
+});
+
 test("狂血: HPに応じて表示倍率と実ダメージが増減する", async ({ page }) => {
   await preparePage(page, "ks_frenzy");
   const maxHp = (await debugState(page)).stats.maxHp;
@@ -79,7 +84,7 @@ test("狂血: HPに応じて表示倍率と実ダメージが増減する", asyn
   expect(lowDamage).toBeGreaterThan(fullDamage);
 
   await patchCombat(page, { hp: maxHp / 2, potions: 3, quickDrinkUsed: false });
-  await page.getByRole("button", { name: /🧪 ×3/ }).click();
+  await page.getByTestId("potion-button").click();
   await expect.poll(async () => (await debugState(page)).player.hp).toBe(maxHp / 2 + 18);
   const healedMultiplier = Number(await page.getByTestId("attack-multiplier").getAttribute("data-multiplier"));
   expect(healedMultiplier).toBeLessThan(lowMultiplier);
@@ -98,7 +103,7 @@ test("収集家: 開始レリック1個、最大HP-12%、上限6を維持する"
   await attackDamage(page);
   expect((await debugState(page)).player.relics).toEqual([startingRelic]);
 
-  await page.getByRole("button", { name: "📊" }).click();
+  await page.getByTestId("status-button").click();
   await expect(page.getByText("(1/6枠", { exact: false })).toBeVisible();
 });
 
@@ -106,7 +111,7 @@ test("錬金: 手動回復は80%で、次の攻撃だけ2倍になる", async ({
   await preparePage(page, "ks_catalyst");
   await patchCombat(page, { hp: 10, potions: 3, quickDrinkUsed: false });
 
-  await page.getByRole("button", { name: /🧪 ×3/ }).click();
+  await page.getByTestId("potion-button").click();
   await expect.poll(async () => (await debugState(page)).player.hp).toBe(39); // round(90 * 0.4 * 0.8) = 29
   const boosted = await attackDamage(page);
   await resetEnemy(page);

@@ -8,6 +8,8 @@ npm run check
 
 lint、Vitest、production buildを順番に実行する。
 
+E2Eはブラウザの導入・Viteサーバー起動を伴い通常チェックを重くするため、`npm run check` には含めず、下記の専用コマンドで実行する。Vitest側でも `e2e/**` を明示的に除外し、Playwrightのテストを誤収集しないよう分離している。
+
 ## Ver.51 契約E2E監査
 
 初回のみChromiumをインストールする。
@@ -28,7 +30,9 @@ npm run test:e2e
 npm run test:e2e:repeat
 ```
 
-Playwrightは専用のVite開発サーバーを自動起動する。テストは開発ビルド限定の `window.__abyssE2E` を使ってHP・敵・乱数条件を固定し、実際のUIボタンと戦闘処理を監査する。このAPIはproduction buildには公開されない。
+Playwrightは専用のVite開発サーバーを自動起動し、終了時に停止する。テストは `window.__abyssTestFast === true` の開発ビルドだけで公開される `window.__abyssE2E` を使ってHP・敵・乱数条件を固定し、実際のUIボタンと戦闘処理を監査する。通常の開発プレイとproduction buildにはこのAPIを公開しない。
+
+CIではChromiumを導入してから同じコマンドを実行する。CI時はworkerを1つに固定し、`test.only` を禁止する。失敗時は `test-results/` にtraceとスクリーンショットが保存される。
 
 ### 自動監査の対象
 
