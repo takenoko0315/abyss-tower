@@ -2,6 +2,18 @@
 
 export const critOverflowBonus = (critChance) => Math.max(0, critChance - 100);
 
+export function frenzyDamageMultiplier(currentHp, maxHp, enabled = false) {
+  if (!enabled || maxHp <= 0) return 1;
+  const missingHpPercent = Math.max(0, (1 - currentHp / maxHp) * 100);
+  return 1 + Math.min(50, missingHpPercent * 0.8) / 100;
+}
+
+export function potionHealingMultiplier({ potionHalf = 0, potionCut20 = 0 } = {}) {
+  if (potionHalf > 0) return 0.5;
+  if (potionCut20 > 0) return 0.8;
+  return 1;
+}
+
 export function doubleTierChances(doubleChance) {
   const chance = Math.max(0, doubleChance);
   const guaranteed = Math.floor(chance / 100);

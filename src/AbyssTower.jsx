@@ -5,12 +5,14 @@ import {
 import { SFX, setSfxMuted, setSfxVolume } from "./game/sfx.js";
 import { playBgm, setBgmMuted, setBgmVolume } from "./game/bgm.js";
 import { metaStorageLoad, metaStorageSave } from "./game/storage.js";
-import { rand, pick, effStats, hasNode, hasRelic } from "./game/utils.js";
+import { rand, pick, pickUnownedRelic, effStats, hasNode, hasRelic } from "./game/utils.js";
 import {
   calculateAttackDamage,
   calculateBaseIncomingDamage,
   doubleTierChances,
+  frenzyDamageMultiplier,
   mergeStatus,
+  potionHealingMultiplier,
   resolveEnemyOngoingEffects,
   resolvePlayerOngoingEffects,
   rollAdditionalHits,
@@ -519,6 +521,10 @@ export default function HackRoguelike() {
         p.skills = [...p.skills, bless.learnSkill];
       }
     }
+    if (p.hooks?.startRandomRelic) {
+      const startRelic = pickUnownedRelic(RELICS, p.relics || []);
+      if (startRelic) p.relics = [...(p.relics || []), startRelic.key];
+    }
     // 恒久アンロック(魂の祭壇)の効果を適用
     const mhp = metaOwned("mhp") * 12, matk = metaOwned("matk") * 3;
     p.maxHp += mhp; p.hp += mhp; p.atk += matk;
@@ -578,6 +584,8 @@ export default function HackRoguelike() {
     if (stats.bossSlayer > 0 && enemy && (enemy.isBoss || enemy.isElite)) { mult *= 1 + stats.bossSlayer / 100; notes.push(`王殺し+${stats.bossSlayer}%`); }
     if (stats.executeBonus > 0 && enemy && enemy.hp / enemy.maxHp <= 0.15) { mult *= 1 + stats.executeBonus / 100; notes.push(`終焉+${stats.executeBonus}%`); }
     if (stats.flatDmg > 0) { mult *= 1 + stats.flatDmg / 100; notes.push(`与ダメ強化+${stats.flatDmg}%`); }
+    const frenzyMult = frenzyDamageMultiplier(player.hp, stats.maxHp, stats.wrathHp > 0);
+    if (frenzyMult > 1) { mult *= frenzyMult; notes.push(`狂血・失HP+${Math.round((frenzyMult - 1) * 1000) / 10}%`); }
     if (!forSkill && stats.basicBonus > 0) { mult *= 1 + stats.basicBonus / 100; notes.push(`無音の誓い+${stats.basicBonus}%`); }
     if (stats.chaosDice > 0) notes.push("深淵の賽:さらに変動(×1.5 or ×0.66)");
     if (stats.gambleDmg > 0) notes.push("気まぐれな打撃:さらに変動(×1.5 or ×0.7)");
@@ -840,8 +848,9 @@ export default function HackRoguelike() {
     // 輸血の契約: HPが25%以下になったら自動で回復薬を1つ消費(ラン中の残り回数まで)
     if (p.hp > 0 && (p.autoPotionLeft || 0) > 0 && p.potions > 0 && p.hp / stats.maxHp <= 0.25) {
       const saved = stats.potionSaveCh > 0 && Math.random() * 100 < stats.potionSaveCh; // 不朽の水筒
-      const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * (1 - (p.healReduce || 0) / 100)));
+      const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * potionHealingMultiplier(stats) * (1 - (p.healReduce || 0) / 100)));
       p = { ...p, hp: Math.min(stats.maxHp, p.hp + heal), potions: saved ? p.potions : p.potions - 1, autoPotionLeft: p.autoPotionLeft - 1 };
+      if (stats.catalystContract > 0) p.nextAtkDouble = true;
       addLog(`💉 輸血の契約が発動！回復薬が自動で使われた(+${heal} HP、残り${p.autoPotionLeft}回)${saved ? "♻️" : ""}`, "heal");
     }
     return p;
@@ -1170,7 +1179,7 @@ export default function HackRoguelike() {
 
   const chooseRoom = (room) => {
     if (room.key === "rest") {
-      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult") * (ACTIVE_MOD.restMult || 1));
+      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult") * (ACTIVE_MOD.restMult || 1) * (stats.restHalf > 0 ? 0.5 : 1));
       setPlayer(p => ({ ...p, hp: Math.min(stats.maxHp, p.hp + heal) }));
       addLog(`${floor}F:焚き火で休んだ (+${heal} HP)`, "heal");
       nextFloor();
@@ -1666,6 +1675,8 @@ export default function HackRoguelike() {
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
     let p = { ...basePlayer };
     if (p.petrified) p = { ...p, petrified: false }; // 石化は攻撃行動で解ける
+    const catalystBoost = !!p.nextAtkDouble;
+    if (catalystBoost) p.nextAtkDouble = false;
     const mod = usedSkill ? (player.skillMods || {})[usedSkill] : null;
     const baseHits = (spec.hits || 1) + (mod === "chainMod" ? 1 : 0);
     // 暗殺者「コンボ」: 1つにつきクリ率+4%・連撃率+2%
@@ -1736,6 +1747,8 @@ export default function HackRoguelike() {
       if (stats.flatDmg > 0) mult *= 1 + stats.flatDmg / 100;                // 契約:与ダメ固定強化
       if (stats.basicBonus > 0 && !usedSkill) mult *= 1 + stats.basicBonus / 100; // 無音の誓い:通常攻撃強化
       if (stats.chaosDice > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.66;    // 深淵の賽(契約)
+      if (catalystBoost) mult *= 2;                                        // 錬金の契約:回復薬直後の一撃
+      mult *= frenzyDamageMultiplier(p.hp, stats.maxHp, stats.wrathHp > 0); // 狂血の契約:失ったHPによる追加分
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
       const dmg = calculateAttackDamage({
@@ -2131,10 +2144,11 @@ export default function HackRoguelike() {
     const baseEnemy = flushed ? flushed.enemy : enemy;
     const saved = stats.potionSaveCh > 0 && Math.random() * 100 < stats.potionSaveCh; // 不朽の水筒
     let p = { ...basePlayer, potions: saved ? basePlayer.potions : basePlayer.potions - 1 };
-    const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * (1 - (p.healReduce || 0) / 100)));
+    const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * potionHealingMultiplier(stats) * (1 - (p.healReduce || 0) / 100)));
     p.hp = Math.min(stats.maxHp, p.hp + heal);
     const cured = p.pPoison?.turns > 0;
     if (cured) p.pPoison = null; // 回復薬は毒も洗い流す
+    if (stats.catalystContract > 0) p.nextAtkDouble = true;
     SFX.potion();
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
     // ユニーク: 錬金術師の長靴(回復量と同じダメージを敵に)
@@ -2440,7 +2454,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.50 — クリ率・連撃率オーバーフロー変換</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.51 — 契約3種の軽量調整</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>

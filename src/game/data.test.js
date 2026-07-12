@@ -39,6 +39,34 @@ describe("キーの一意性", () => {
   });
 });
 
+describe("TASK-014 contracts", () => {
+  const applyContract = (key, overrides = {}) => {
+    const player = { maxHp: 100, hp: 80, relics: [], hooks: {}, ...overrides };
+    return BLESSINGS.find(blessing => blessing.key === key).apply(player);
+  };
+
+  it("configures frenzy with its flat and missing-HP damage bonuses", () => {
+    const contract = BLESSINGS.find(blessing => blessing.key === "ks_frenzy");
+    const player = contract.apply({ maxHp: 100, hp: 80, relics: [], hooks: {} });
+    expect(player.hooks).toMatchObject({ flatDmg: 10, wrathHp: 1 });
+    expect(contract.desc).toContain("常時与ダメ+10%");
+    expect(contract.desc).toContain("失ったHP1%につき与ダメ+0.8%");
+    expect(contract.desc).toContain("最大+50%");
+  });
+
+  it("reduces collector max HP by 12% and requests one starting relic without raising the cap", () => {
+    const player = applyContract("ks_collector");
+    expect(player).toMatchObject({ maxHp: 88, hp: 68 });
+    expect(player.hooks).toEqual({ startRandomRelic: 1 });
+    expect(player.hooks.relicCap).toBeUndefined();
+  });
+
+  it("configures catalyst with a 20% potion penalty and preserves its attack boost", () => {
+    const player = applyContract("ks_catalyst");
+    expect(player.hooks).toEqual({ potionCut20: 1, catalystContract: 1 });
+  });
+});
+
 describe("参照の整合性", () => {
   it("全ての敵のgimmickがGIMMICKSに存在する", () => {
     for (const e of ENEMIES) expect(GIMMICKS[e.gimmick], `${e.name} のギミック ${e.gimmick}`).toBeDefined();
