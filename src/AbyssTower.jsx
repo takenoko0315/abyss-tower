@@ -5,12 +5,14 @@ import {
 import { SFX, setSfxMuted, setSfxVolume } from "./game/sfx.js";
 import { playBgm, setBgmMuted, setBgmVolume } from "./game/bgm.js";
 import { metaStorageLoad, metaStorageSave } from "./game/storage.js";
-import { rand, pick, effStats, hasNode, hasRelic } from "./game/utils.js";
+import { rand, pick, pickUnownedRelic, effStats, hasNode, hasRelic } from "./game/utils.js";
 import {
   calculateAttackDamage,
   calculateBaseIncomingDamage,
   doubleTierChances,
+  frenzyDamageMultiplier,
   mergeStatus,
+  potionHealingMultiplier,
   resolveEnemyOngoingEffects,
   resolvePlayerOngoingEffects,
   rollAdditionalHits,
@@ -518,6 +520,10 @@ export default function HackRoguelike() {
         p.knownSkills = [...p.knownSkills, bless.learnSkill];
         p.skills = [...p.skills, bless.learnSkill];
       }
+    }
+    if (p.hooks?.startRandomRelic) {
+      const startRelic = pickUnownedRelic(RELICS, p.relics || []);
+      if (startRelic) p.relics = [...(p.relics || []), startRelic.key];
     }
     // 恒久アンロック(魂の祭壇)の効果を適用
     const mhp = metaOwned("mhp") * 12, matk = metaOwned("matk") * 3;
@@ -1170,7 +1176,7 @@ export default function HackRoguelike() {
 
   const chooseRoom = (room) => {
     if (room.key === "rest") {
-      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult") * (ACTIVE_MOD.restMult || 1));
+      const heal = Math.round(stats.maxHp * 0.35 * ascFx("restMult") * (ACTIVE_MOD.restMult || 1) * (stats.restHalf > 0 ? 0.5 : 1));
       setPlayer(p => ({ ...p, hp: Math.min(stats.maxHp, p.hp + heal) }));
       addLog(`${floor}F:焚き火で休んだ (+${heal} HP)`, "heal");
       nextFloor();
@@ -1666,6 +1672,8 @@ export default function HackRoguelike() {
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
     let p = { ...basePlayer };
     if (p.petrified) p = { ...p, petrified: false }; // 石化は攻撃行動で解ける
+    const catalystBoost = !!p.nextAtkDouble;
+    if (catalystBoost) p.nextAtkDouble = false;
     const mod = usedSkill ? (player.skillMods || {})[usedSkill] : null;
     const baseHits = (spec.hits || 1) + (mod === "chainMod" ? 1 : 0);
     // 暗殺者「コンボ」: 1つにつきクリ率+4%・連撃率+2%
@@ -1736,6 +1744,8 @@ export default function HackRoguelike() {
       if (stats.flatDmg > 0) mult *= 1 + stats.flatDmg / 100;                // 契約:与ダメ固定強化
       if (stats.basicBonus > 0 && !usedSkill) mult *= 1 + stats.basicBonus / 100; // 無音の誓い:通常攻撃強化
       if (stats.chaosDice > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.66;    // 深淵の賽(契約)
+      if (catalystBoost) mult *= 2;                                        // 錬金の契約:回復薬直後の一撃
+      mult *= frenzyDamageMultiplier(p.hp, stats.maxHp, stats.wrathHp > 0); // 狂血の契約:失ったHPによる追加分
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
       const dmg = calculateAttackDamage({
@@ -2131,10 +2141,11 @@ export default function HackRoguelike() {
     const baseEnemy = flushed ? flushed.enemy : enemy;
     const saved = stats.potionSaveCh > 0 && Math.random() * 100 < stats.potionSaveCh; // 不朽の水筒
     let p = { ...basePlayer, potions: saved ? basePlayer.potions : basePlayer.potions - 1 };
-    const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * (1 - (p.healReduce || 0) / 100)));
+    const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * potionHealingMultiplier(stats) * (1 - (p.healReduce || 0) / 100)));
     p.hp = Math.min(stats.maxHp, p.hp + heal);
     const cured = p.pPoison?.turns > 0;
     if (cured) p.pPoison = null; // 回復薬は毒も洗い流す
+    if (stats.catalystContract > 0) p.nextAtkDouble = true;
     SFX.potion();
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
     // ユニーク: 錬金術師の長靴(回復量と同じダメージを敵に)

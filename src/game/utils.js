@@ -10,6 +10,12 @@ export const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + 
 
 export const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 
+export function pickUnownedRelic(relics, ownedKeys = [], random = Math.random) {
+  const owned = new Set(ownedKeys);
+  const pool = relics.filter(relic => !owned.has(relic.key));
+  return pool.length > 0 ? pool[Math.floor(random() * pool.length)] : undefined;
+}
+
 // 装備の実効ステータス(基礎値 × (1 + 10% × 強化数)。複利しない)
 // 固有能力(abilityStats)は「強化できない欄」として倍率の対象外で加算する
 export function effStats(item) {

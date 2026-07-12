@@ -42,6 +42,9 @@ export const BLESSINGS = [
   { key: "ks_leaden", icon: "🛡️", keystone: true, name: "鉛の鎧", desc: "【契約】連撃が一切出なくなる。代わりに受けるダメージ-18%", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), noDouble: 1, dmgReduce: 18 } }) },
   { key: "ks_bloodbowl", icon: "🥣", keystone: true, name: "血染めの杯", desc: "【契約】吸血+15%。だが毎ターン最大HPの3%を失い続ける", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), lifesteal: 15, drainPerTurn: 3 } }) },
   { key: "ks_chaos", icon: "🎲", keystone: true, name: "深淵の賽", desc: "【契約】与ダメも被ダメも、常に50%で1.5倍・50%で0.66倍になる", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), chaosDice: 1 } }) },
+  { key: "ks_frenzy", icon: "🩸", keystone: true, name: "狂血の契約", desc: "【契約】回復薬と焚き火の回復量が半分になる。代わりに常時与ダメ+10%、さらに失ったHP1%につき与ダメ+0.8%(追加分は最大+50%)", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), potionHalf: 1, restHalf: 1, flatDmg: 10, wrathHp: 1 } }) },
+  { key: "ks_collector", icon: "🎒", keystone: true, name: "収集家の契約", desc: "【契約】最大HP-12%。代わりにランダムなレリックを1つ持ってランを開始する", apply: p => { const cut = Math.round(p.maxHp * 0.12); return { ...p, maxHp: p.maxHp - cut, hp: Math.max(1, p.hp - cut), hooks: { ...(p.hooks || {}), startRandomRelic: 1 } }; } },
+  { key: "ks_catalyst", icon: "⚗️", keystone: true, name: "錬金の契約", desc: "【契約】回復薬の回復量が20%減る。代わりに回復薬を飲むと次の攻撃の与ダメが2倍になる(薬が攻撃資源になる)", apply: p => ({ ...p, hooks: { ...(p.hooks || {}), potionCut20: 1, catalystContract: 1 } }) },
 ];
 // クラスの根幹と矛盾する契約は候補から除外する(選ぶ意味のない3択を防ぐ)
 export const KEYSTONE_EXCLUDE = {

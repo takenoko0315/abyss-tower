@@ -5,9 +5,25 @@ import {
   critOverflowBonus,
   decrementStatusTurn,
   doubleTierChances,
+  frenzyDamageMultiplier,
   mergeStatus,
+  potionHealingMultiplier,
   rollAdditionalHits,
 } from "./combat.js";
+
+describe("TASK-014 contract calculations", () => {
+  it("adds 0.8% damage per missing HP percent and caps the added part at 50%", () => {
+    expect(frenzyDamageMultiplier(100, 100, true)).toBe(1);
+    expect(frenzyDamageMultiplier(50, 100, true)).toBe(1.4);
+    expect(frenzyDamageMultiplier(0, 100, true)).toBe(1.5);
+    expect(frenzyDamageMultiplier(50, 100, false)).toBe(1);
+  });
+
+  it("reduces catalyst potion healing by 20% without changing normal healing", () => {
+    expect(potionHealingMultiplier()).toBe(1);
+    expect(potionHealingMultiplier({ potionCut20: 1 })).toBe(0.8);
+  });
+});
 
 describe("attack damage", () => {
   it("calculates basic damage from attack and skill multiplier", () => {
