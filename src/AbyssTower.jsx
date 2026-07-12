@@ -9,9 +9,10 @@ import { rand, pick, effStats, hasNode, hasRelic } from "./game/utils.js";
 import {
   calculateAttackDamage,
   calculateBaseIncomingDamage,
-  decrementStatusTurn,
   doubleTierChances,
   mergeStatus,
+  resolveEnemyOngoingEffects,
+  resolvePlayerOngoingEffects,
   rollAdditionalHits,
 } from "./game/combat.js";
 
@@ -615,65 +616,47 @@ export default function HackRoguelike() {
     const parryReady = !!p.parryReady;
     const parryMult = p.parryMult || 1;
     if (p.parryReady) p = { ...p, parryReady: false };
-    // 血染めの杯(契約):毎ターン最大HPの3%を失う
-    if (stats.drainPerTurn > 0 && p.hp > 0) {
-      const dr = Math.max(1, Math.round(stats.maxHp * stats.drainPerTurn / 100));
-      p = { ...p, hp: p.hp - dr };
-      addLog(`🥣 血染めの杯が命を啜る… ${dr}ダメージ`, "hurt");
-      if (p.hp <= 0) return p;
+    const playerEffects = resolvePlayerOngoingEffects({
+      player: p,
+      maxHp: stats.maxHp,
+      drainPerTurn: stats.drainPerTurn || 0,
+    });
+    p = playerEffects.nextPlayer;
+    for (const event of playerEffects.events) {
+      if (event.source === "bloodBowl") addLog(`🥣 血染めの杯が命を啜る… ${event.value}ダメージ`, "hurt");
+      if (event.source === "poison") {
+        addLog(`🟣 毒が回る… ${event.value}ダメージ`, "hurt");
+        if (hitLog) hitLog.push({ dmg: event.value, status: "poison" }); // 状態異常ポップ用(TASK-010)
+      }
     }
-    // プレイヤーの毒(毒撃で付与される)を処理
-    if (p.pPoison?.turns > 0) {
-      const pd = p.pPoison.dmg;
-      p = { ...p, hp: p.hp - pd, pPoison: { ...p.pPoison, turns: p.pPoison.turns - 1 } };
-      addLog(`🟣 毒が回る… ${pd}ダメージ`, "hurt");
-      if (hitLog) hitLog.push({ dmg: pd, status: "poison" }); // 状態異常ポップ用(TASK-010)
-      if (p.hp <= 0) return p;
-    }
+    if (playerEffects.shouldStop) return p;
     // 吸血鬼ツリー:不死再生
     if (hasNode(player, "v2")) {
       const regen = Math.max(1, Math.round(stats.maxHp * 0.04));
       if (p.hp < stats.maxHp) { p = { ...p, hp: Math.min(stats.maxHp, p.hp + regen) }; addLog(`🩸 不死再生でHP+${regen}`, "heal"); }
     }
-    // エリート特性:再生
-    if (e.trait === "regen" && e.hp > 0 && e.hp < e.maxHp) {
-      const heal = Math.max(1, Math.round(e.maxHp * 0.06));
-      e.hp = Math.min(e.maxHp, e.hp + heal);
-      addLog(`💚 ${e.name}が再生でHP+${heal}`, "info");
+    let burnRate = 0;
+    if (e.status?.burn?.turns > 0) {
+      burnRate = hasNode(player, "m1") ? 0.11 : 0.06; // 業火(ツリー)
+      if (hasRelic(player, "burn")) burnRate += 0.04;  // 業火の宝珠(レリック)
+      burnRate += ACTIVE_ZONE.burnBoost || 0;          // 灼けた荒野(ゾーン)
+      burnRate *= 1 + (stats.burnPower || 0) / 100;    // 炎威力(アフィックス・出自・レリック)
     }
-    // 状態異常の継続ダメージ(毒・出血・炎上)
-    if (e.status) {
-      if (e.status.poison?.turns > 0) {
-        e.hp -= e.status.poison.dmg;
-        addLog(`🟣 ${e.name}は毒で${e.status.poison.dmg}ダメージ`, "dmg");
-        if (enemyStatusLog) enemyStatusLog.push({ dmg: e.status.poison.dmg, status: "poison" }); // 状態異常ポップ用(TASK-010)
-        e.status = decrementStatusTurn(e.status, "poison");
+    const enemyEffects = resolveEnemyOngoingEffects({ enemy: e, burnRate });
+    Object.assign(e, enemyEffects.nextEnemy); // enemyTurnの既存契約:呼び出し元が保持する敵参照へ結果を反映
+    for (const event of enemyEffects.events) {
+      if (event.type === "heal" && event.source === "regen") {
+        addLog(`💚 ${e.name}が再生でHP+${event.value}`, "info");
       }
-      if (e.status.bleed?.turns > 0) {
-        e.hp -= e.status.bleed.dmg;
-        addLog(`🩸 ${e.name}は出血で${e.status.bleed.dmg}ダメージ`, "dmg");
-        if (enemyStatusLog) enemyStatusLog.push({ dmg: e.status.bleed.dmg, status: "bleed" });
-        e.status = decrementStatusTurn(e.status, "bleed");
-      }
-      if (e.status.burn?.turns > 0) {
-        let rate = hasNode(player, "m1") ? 0.11 : 0.06; // 業火(ツリー)
-        if (hasRelic(player, "burn")) rate += 0.04;      // 業火の宝珠(レリック)
-        rate += ACTIVE_ZONE.burnBoost || 0;              // 灼けた荒野(ゾーン)
-        rate *= 1 + (stats.burnPower || 0) / 100;        // 炎威力(アフィックス・出自・レリック)
-        const d = Math.max(1, Math.round(e.maxHp * rate));
-        e.hp -= d;
-        addLog(`🔥 ${e.name}は炎上で${d}ダメージ`, "dmg");
-        if (enemyStatusLog) enemyStatusLog.push({ dmg: d, status: "burn" });
-        e.status = decrementStatusTurn(e.status, "burn");
+      if (event.type === "damage") {
+        const icon = event.source === "poison" ? "🟣" : event.source === "bleed" ? "🩸" : "🔥";
+        const label = event.source === "poison" ? "毒" : event.source === "bleed" ? "出血" : "炎上";
+        addLog(`${icon} ${e.name}は${label}で${event.value}ダメージ`, "dmg");
+        if (enemyStatusLog) enemyStatusLog.push({ dmg: event.value, status: event.source }); // 状態異常ポップ用(TASK-010)
       }
     }
-    if (e.hp <= 0) return p; // 継続ダメージで撃破(呼び出し側がe.hpを確認)
-    // 凍結・気絶で行動不能か(行動不能でも予告した行動は温存される=大技を遅らせる戦術が有効)
-    let incap = false;
-    if (e.status?.freeze?.turns > 0) { incap = true; e.status = decrementStatusTurn(e.status, "freeze"); }
-    if (e.status?.stun?.turns > 0) { incap = true; e.status = decrementStatusTurn(e.status, "stun"); }
-    if (e.status?.weaken?.turns > 0) e.status = decrementStatusTurn(e.status, "weaken"); // 衰弱は行動不能にしない(攻撃力が落ちたまま行動する)
-    if (incap) {
+    if (enemyEffects.stopReason === "enemyDead") return p; // 継続ダメージで撃破
+    if (enemyEffects.incapacitated) {
       addLog(`${e.name}は動けない！(${INTENTS[e.intent].icon}${INTENTS[e.intent].name}は持ち越し)`, "info");
       return p;
     }
