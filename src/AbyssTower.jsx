@@ -26,6 +26,7 @@ import {
   resolveHeavyCounterplay,
 } from "./game/heavyCounterplay.js";
 import { initializeRhythm, previewPlayerAction, resolveEnemyRhythmAction, resolvePlayerRhythmAction, rhythmFor } from "./game/combatRhythm.js";
+import { applySandboxFinalMultipliers, createSandboxEquipment, normalizeSandboxCount, normalizeSandboxMultiplier, SANDBOX_MULTIPLIERS, SANDBOX_PRESETS, sandboxSkillsFor } from "./game/combatSandbox.js";
 
 let ACTIVE_DIFF = DIFFICULTIES.normal;
 
@@ -370,7 +371,7 @@ export default function HackRoguelike() {
   const [playerHitFx, setPlayerHitFx] = useState({ nonce: 0, heavy: false }); // 画面端フラッシュ再生用
   const sandboxEnabled = import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("combatSandbox") === "1";
   const [sandboxMode, setSandboxMode] = useState(false);
-  const [sandboxConfig, setSandboxConfig] = useState({ enemy: "鉄の処刑人", floor: 10, cls: "warrior", blessing: "", contract: "none", equipment: "none", hp: 100, seed: 7001, patternIdx: 2, intent: "heavy", rhythmPhase: "default" });
+  const [sandboxConfig, setSandboxConfig] = useState({ enemy: "鉄の処刑人", floor: 10, cls: "warrior", blessing: "", contract: "none", equipment: "standard10", hp: 100, seed: 7001, patternIdx: 2, intent: "heavy", rhythmPhase: "default", atkMult: 1, hpMult: 1, defMult: 1, potions: 3, skillCd: 0 });
   const sandboxNativeRandom = useRef(null);
   const sandboxSnapshot = useRef(null);
   useEffect(() => () => {
@@ -596,7 +597,12 @@ export default function HackRoguelike() {
       seed: Number.isFinite(seedValue) ? (Math.trunc(seedValue) >>> 0) : 7001,
       patternIdx: Number.isFinite(patternValue) ? Math.max(0, Math.min(999, Math.trunc(patternValue))) : 0,
       intent: Object.hasOwn(INTENTS, raw.intent) ? raw.intent : "attack",
-      equipment: ["none", "offense", "defense"].includes(raw.equipment) ? raw.equipment : "none",
+      equipment: SANDBOX_PRESETS.some(item => item.key === raw.equipment) ? raw.equipment : "standard10",
+      atkMult: normalizeSandboxMultiplier(raw.atkMult),
+      hpMult: normalizeSandboxMultiplier(raw.hpMult),
+      defMult: normalizeSandboxMultiplier(raw.defMult),
+      potions: normalizeSandboxCount(raw.potions, 3, 20),
+      skillCd: normalizeSandboxCount(raw.skillCd, 0, 20),
       blessing: BLESSINGS.some(item => item.key === raw.blessing) ? raw.blessing : "",
       contract: BLESSINGS.some(item => item.key === raw.contract) ? raw.contract : "none",
     };
@@ -626,7 +632,7 @@ export default function HackRoguelike() {
     p.variant = "a";
     p.diff = "normal";
     p.mod = "none";
-    p.skills = [cls.skill]; p.knownSkills = [cls.skill]; p.skillMods = {}; p.hooks = {}; p.ascension = [];
+    p.skills = sandboxSkillsFor(cfg.cls, cfg.equipment, cls.skill); p.knownSkills = [...p.skills]; p.skillMods = {}; p.hooks = {}; p.ascension = [];
     for (const key of [cfg.blessing, cfg.contract]) {
       const blessing = BLESSINGS.find(item => item.key === key);
       if (!blessing) continue;
@@ -637,15 +643,15 @@ export default function HackRoguelike() {
         p.skills = [...p.skills, blessing.learnSkill];
       }
     }
-    sandboxEquip = { weapon: null, armor: null, helmet: null, boots: null, ring: null, amulet: null };
-    if (cfg.equipment === "offense") sandboxEquip.weapon = { slot: "weapon", rarity: 0, name: "訓練用大剣", stats: { atk: 25 }, curse: null };
-    if (cfg.equipment === "defense") sandboxEquip.armor = { slot: "armor", rarity: 0, name: "訓練用重鎧", stats: { def: 20, hp: 50 }, curse: null };
+    sandboxEquip = createSandboxEquipment(cfg.equipment);
     const candidates = [...ENEMIES, ...ALL_BOSSES];
     base = candidates.find(item => item.name === cfg.enemy) || BOSS_POOLS[1].find(item => item.counterplay === "heavy-v1");
     cfg.enemy = base.name;
     e = genEnemy(cfg.floor);
     const phaseOverride = cfg.rhythmState || (cfg.rhythmPhase === "default" ? {} : cfg.rhythmPhase === "parry-ready" ? { phase: "armored", parryReady: true } : cfg.rhythmPhase === "flying" ? { phase: "flying", actionsLeft: 2 } : cfg.rhythmPhase === "overheated" ? { phase: "overheated", actionsLeft: 2 } : cfg.rhythmPhase === "breath" ? { phase: "breath", actionsLeft: 0 } : cfg.rhythmPhase === "crystal-exposed" ? { phase: "exposed", categories: [] } : { phase: cfg.rhythmPhase });
     e = initializeRhythm({ ...e, ...base, codexId: base.name, hp: e.maxHp, patternIdx: cfg.patternIdx, intent: cfg.intent, status: {}, guardTurns: 0 }, phaseOverride);
+    p = applySandboxFinalMultipliers(p, totalStats(p, sandboxEquip), { atk: cfg.atkMult, hp: cfg.hpMult, def: cfg.defMult });
+    p.potions = p.hooks?.noPotion ? 0 : cfg.potions;
     const maxHp = totalStats(p, sandboxEquip).maxHp;
     p.hp = Math.max(1, Math.min(maxHp, Math.round(maxHp * cfg.hp / 100)));
     } catch (error) {
@@ -659,7 +665,7 @@ export default function HackRoguelike() {
       setSandboxMode(false);
       throw error;
     }
-    setEquip(sandboxEquip); setPlayer(p); setEnemy(e); setFloor(cfg.floor); setKills(0); setCds({});
+    setEquip(sandboxEquip); setPlayer(p); setEnemy(e); setFloor(cfg.floor); setKills(0); setCds(Object.fromEntries(p.skills.map(key => [key, cfg.skillCd])));
     setDrop(null); setShopItem(null); setTurnPending(false); setEnemyPopups([]); setPlayerPopups([]);
     setLog([{ t: `🧪 サンドボックス: ${base.name} / seed ${cfg.seed}`, c: "info" }]);
     setScene("combat");
@@ -679,6 +685,39 @@ export default function HackRoguelike() {
     sandboxSnapshot.current = null;
     setSandboxMode(false);
     setScene("title");
+  };
+
+  const previewSandboxConfig = config => {
+    const cls = CLASSES[Object.hasOwn(CLASSES, config.cls) ? config.cls : "warrior"];
+    let previewPlayer = cls.base(newPlayer());
+    previewPlayer.cls = Object.hasOwn(CLASSES, config.cls) ? config.cls : "warrior";
+    previewPlayer.skills = sandboxSkillsFor(previewPlayer.cls, config.equipment, cls.skill);
+    previewPlayer.knownSkills = [...previewPlayer.skills];
+    previewPlayer.skillMods = {}; previewPlayer.hooks = {}; previewPlayer.ascension = [];
+    for (const key of [config.blessing, config.contract]) {
+      const blessing = BLESSINGS.find(entry => entry.key === key);
+      if (!blessing) continue;
+      if (blessing.apply) previewPlayer = blessing.apply(previewPlayer);
+      if (blessing.learnSkill && !previewPlayer.skills.includes(blessing.learnSkill)) previewPlayer.skills = [...previewPlayer.skills, blessing.learnSkill];
+    }
+    const previewEquip = createSandboxEquipment(config.equipment);
+    previewPlayer = applySandboxFinalMultipliers(previewPlayer, totalStats(previewPlayer, previewEquip), { atk: config.atkMult, hp: config.hpMult, def: config.defMult });
+    previewPlayer.potions = previewPlayer.hooks?.noPotion ? 0 : normalizeSandboxCount(config.potions, 3, 20);
+    const previewStats = totalStats(previewPlayer, previewEquip);
+    const base = [...ENEMIES, ...ALL_BOSSES].find(entry => entry.name === config.enemy) || BOSS_POOLS[1].find(entry => entry.counterplay === "heavy-v1");
+    const nativeRandom = Math.random;
+    let seed = Number.isFinite(Number(config.seed)) ? (Math.trunc(Number(config.seed)) >>> 0) : 7001;
+    Math.random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+    let previewEnemy;
+    try {
+      previewEnemy = genEnemy(Math.max(1, Math.min(999, Math.trunc(Number(config.floor)) || 1)));
+      const phaseOverride = config.rhythmPhase === "default" ? {} : config.rhythmPhase === "parry-ready" ? { phase: "armored", parryReady: true } : config.rhythmPhase === "flying" ? { phase: "flying", actionsLeft: 2 } : config.rhythmPhase === "overheated" ? { phase: "overheated", actionsLeft: 2 } : config.rhythmPhase === "breath" ? { phase: "breath", actionsLeft: 0 } : config.rhythmPhase === "crystal-exposed" ? { phase: "exposed", categories: [] } : { phase: config.rhythmPhase };
+      previewEnemy = initializeRhythm({ ...previewEnemy, ...base, codexId: base.name, hp: previewEnemy.maxHp, status: {}, guardTurns: 0 }, phaseOverride);
+    } finally {
+      Math.random = nativeRandom;
+    }
+    const direct = previewPlayerAction(previewEnemy, "attack").multiplier;
+    return { player: previewPlayer, equip: previewEquip, stats: previewStats, enemy: previewEnemy, direct };
   };
 
   const stats = totalStats(player, equip);
@@ -2652,7 +2691,7 @@ export default function HackRoguelike() {
   // balance-bot(scripts/balance-bot.mjs)用。DOM文言のscrapingだと脆いため、現在の画面判定に必要な生の状態をそのまま公開する(devのみ)
   if (import.meta.env.DEV) {
     window.__abyssDebug = {
-      scene, floor, player, stats, enemy, cds, turnPending,
+      scene, floor, player, stats, enemy, equip, cds, turnPending,
       pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices,
       drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
     };
@@ -2691,6 +2730,7 @@ export default function HackRoguelike() {
 
   if (sandboxEnabled && scene === "sandbox") {
     const update = (key, value) => setSandboxConfig(current => ({ ...current, [key]: value }));
+    const preview = previewSandboxConfig(sandboxConfig);
     const enemies = [...new Map([...ENEMIES, ...ALL_BOSSES].map(item => [item.name, item])).values()];
     const field = { width: "100%", background: "#1c1917", color: "#e7e5e4", border: "1px solid #57534e", borderRadius: 6, padding: 8, fontFamily: "inherit" };
     return (
@@ -2704,11 +2744,25 @@ export default function HackRoguelike() {
           <label style={{ fontSize: 12 }}>HP %<input type="number" min="1" max="100" value={sandboxConfig.hp} onChange={event => update("hp", event.target.value)} style={field} /></label>
           <label style={{ fontSize: 12 }}>祝福<select value={sandboxConfig.blessing} onChange={event => update("blessing", event.target.value)} style={field}><option value="">なし</option>{BLESSINGS.filter(item => !item.key.startsWith("ks_")).map(item => <option key={item.key} value={item.key}>{item.name}</option>)}</select></label>
           <label style={{ fontSize: 12 }}>契約<select value={sandboxConfig.contract} onChange={event => update("contract", event.target.value)} style={field}><option value="none">なし</option>{BLESSINGS.filter(item => item.key.startsWith("ks_")).map(item => <option key={item.key} value={item.key}>{item.name}</option>)}</select></label>
-          <label style={{ fontSize: 12 }}>装備<select value={sandboxConfig.equipment} onChange={event => update("equipment", event.target.value)} style={field}><option value="none">装備なし</option><option value="offense">訓練用火力装備</option><option value="defense">訓練用防御装備</option></select></label>
+          <label style={{ fontSize: 12 }}>装備プリセット<select data-testid="sandbox-equipment" value={sandboxConfig.equipment} onChange={event => update("equipment", event.target.value)} style={field}>{SANDBOX_PRESETS.map(item => <option key={item.key} value={item.key}>{item.name}</option>)}</select></label>
           <label style={{ fontSize: 12 }}>Seed<input type="number" value={sandboxConfig.seed} onChange={event => update("seed", event.target.value)} style={field} /></label>
           <label style={{ fontSize: 12 }}>行動段階<input type="number" min="0" value={sandboxConfig.patternIdx} onChange={event => update("patternIdx", event.target.value)} style={field} /></label>
           <label style={{ fontSize: 12 }}>予告<select data-testid="sandbox-intent" value={sandboxConfig.intent} onChange={event => update("intent", event.target.value)} style={field}>{Object.entries(INTENTS).map(([key, value]) => <option key={key} value={key}>{value.icon}{value.name}</option>)}</select></label>
           <label style={{ fontSize: 12 }}>戦闘リズム状態<select data-testid="sandbox-rhythm-phase" value={sandboxConfig.rhythmPhase} onChange={event => update("rhythmPhase", event.target.value)} style={field}><option value="default">初期状態</option><option value="parry-ready">処刑人:受け流し準備</option><option value="exposed">処刑人:装甲崩壊</option><option value="flying">古竜:飛翔</option><option value="breath">古竜:ブレス直前</option><option value="overheated">古竜:過熱</option><option value="barrier">結晶:障壁</option><option value="crystal-exposed">結晶:障壁崩壊</option></select></label>
+          {[['atkMult', '攻撃力倍率'], ['hpMult', '最大HP倍率'], ['defMult', '防御力倍率']].map(([key, label]) => <label key={key} style={{ fontSize: 12 }}>{label}<select data-testid={`sandbox-${key}`} value={sandboxConfig[key]} onChange={event => update(key, Number(event.target.value))} style={field}>{SANDBOX_MULTIPLIERS.map(value => <option key={value} value={value}>{value.toFixed(1)}</option>)}</select></label>)}
+          <label style={{ fontSize: 12 }}>回復薬数<input data-testid="sandbox-potions" type="number" min="0" max="20" value={sandboxConfig.potions} onChange={event => update("potions", event.target.value)} style={field} /></label>
+          <label style={{ fontSize: 12 }}>スキルCD初期値<input data-testid="sandbox-skill-cd" type="number" min="0" max="20" value={sandboxConfig.skillCd} onChange={event => update("skillCd", event.target.value)} style={field} /></label>
+        </div>
+        <div data-testid="sandbox-preview" style={{ marginTop: 16, padding: 12, border: "1px solid #0e7490", borderRadius: 8, background: "#0c1a1d", fontSize: 12 }}>
+          <div style={{ color: "#67e8f9", fontWeight: 800, marginBottom: 6 }}>プレイヤー最終ステータス</div>
+          <div>最大HP {preview.stats.maxHp} / 攻撃力 {preview.stats.atk} / 防御力 {preview.stats.def}</div>
+          <div>会心率 {preview.stats.crit}% / 会心倍率 {preview.stats.critDmg}% / 連撃率 {preview.stats.double}%</div>
+          <div>毒 {preview.stats.poisonPower || 0}% / 出血 {preview.stats.bleedPower || 0}% / 炎上 {preview.stats.burnPower || 0}% / 衰弱 {preview.stats.weakenPower || 0}%</div>
+          <div>回復薬 {preview.player.potions} / スキル {preview.player.skills.map(key => SKILLS[key]?.name || key).join("、")}</div>
+          <div>装備 {Object.values(preview.equip).filter(Boolean).map(item => item.name).join("、") || "なし"}</div>
+          <div style={{ color: "#fbbf24", fontWeight: 800, margin: "10px 0 4px" }}>敵プレビュー</div>
+          <div>最大HP {preview.enemy.maxHp} / 攻撃力 {preview.enemy.atk}</div>
+          <div>戦闘リズム {preview.enemy.rhythmState?.phase || "なし"} / 直接ダメージ倍率 ×{preview.direct.toFixed(2)}</div>
         </div>
         <button data-testid="sandbox-start" onClick={() => startSandboxCombat()} style={{ ...btnStyle(false, "#0e7490"), width: "100%", marginTop: 16 }}>この条件で戦闘開始</button>
         <button data-testid="sandbox-exit" onClick={leaveSandbox} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>タイトルへ戻る</button>
