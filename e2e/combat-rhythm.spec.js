@@ -11,7 +11,7 @@ test("処刑人は防御準備後の処刑防御でのみ装甲崩壊する", as
   await expect(page.getByTestId("combat-rhythm")).toHaveCount(0);
   await expect(page.getByTestId("attack-damage-preview")).toContainText("予想");
   await expect(page.getByTestId("execution-countdown")).toContainText("1");
-  await expect(page.getByTestId("execution-intent")).toContainText("🪓 処刑");
+  await expect(page.getByTestId("execution-intent")).toContainText("処刑");
   const maxHp = await page.evaluate(() => window.__abyssDebug.enemy.maxHp);
   const threshold = Math.ceil(maxHp * 0.2);
   await expect(page.getByTestId("execution-threshold")).toHaveText(`1行動で${threshold}以上なら中断`);

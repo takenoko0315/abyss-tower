@@ -3555,6 +3555,8 @@ export default function HackRoguelike() {
 
   // ===== 戦闘 =====
   const xpNeed = Math.round((15 + player.level * 9) * (player.discountNextLevel ? 0.5 : 1));
+  // 鉄の処刑人戦だけ、行動ボタンを「技名は小さく・予想数値を大きく」のレイアウトへ寄せる(他の敵は既存レイアウトのまま)
+  const isExecutionerFight = isHeavyCounterplayEnemy(enemy);
   return (
     <div style={wrap}>
       {/* 戦闘演出用CSS(TASK-009): ダメージポップ・ヒットシェイク・被弾フラッシュ */}
@@ -3623,7 +3625,7 @@ export default function HackRoguelike() {
 
       {/* 敵 */}
       {enemy && (
-        <div data-testid="enemy-card" style={{ position: "relative", background: enemy.rhythmState?.phase === "exposed" ? "#2b2105" : enemy.isFinal ? "#2a0a0a" : enemy.isBoss ? "#1c1007" : "#161210", border: `2px solid ${enemy.rhythmState?.phase === "exposed" ? "#fbbf24" : enemy.isFinal ? "#dc2626" : enemy.isBoss ? "#b45309" : "#292524"}`, boxShadow: enemy.rhythmState?.phase === "exposed" ? "0 0 24px rgba(251,191,36,.65)" : enemy.isFinal ? "0 0 22px rgba(220,38,38,0.4)" : "none", borderRadius: 10, padding: 14, marginBottom: 12, textAlign: "center", animation: isHeavyCounterplay(enemy) ? "abyss-danger-pulse .7s ease-in-out infinite" : enemyHitFx > 0 ? `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out` : "none" }}>
+        <div data-testid="enemy-card" style={{ position: "relative", background: enemy.rhythmState?.phase === "exposed" ? "#2b2105" : isHeavyCounterplay(enemy) ? "#26080a" : enemy.isFinal ? "#2a0a0a" : enemy.isBoss ? "#1c1007" : "#161210", border: `2px solid ${enemy.rhythmState?.phase === "exposed" ? "#fbbf24" : isHeavyCounterplay(enemy) ? "#dc2626" : enemy.isFinal ? "#dc2626" : enemy.isBoss ? "#b45309" : "#292524"}`, boxShadow: enemy.rhythmState?.phase === "exposed" ? "0 0 24px rgba(251,191,36,.65)" : isHeavyCounterplay(enemy) ? "0 0 18px rgba(220,38,38,.4)" : enemy.isFinal ? "0 0 22px rgba(220,38,38,0.4)" : "none", borderRadius: 10, padding: 14, marginBottom: 12, textAlign: "center", animation: isHeavyCounterplay(enemy) ? "abyss-danger-pulse .7s ease-in-out infinite" : enemyHitFx > 0 ? `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out` : "none" }}>
           {enemyPopups.length > 0 && (
             <div style={{ position: "absolute", left: "50%", top: 6, width: 0, height: 0, pointerEvents: "none" }}>
               {enemyPopups.map(pop => (
@@ -3668,10 +3670,11 @@ export default function HackRoguelike() {
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 2,
                 minWidth: imminent ? 42 : 30, minHeight: imminent ? 42 : 30, padding: "0 7px",
                 borderRadius: "14px 14px 3px 14px", boxSizing: "border-box",
-                border: `2px solid ${imminent ? "#fecaca" : "#78716c"}`,
-                background: imminent ? "#ef4444" : "#44403c", color: imminent ? "#fff" : "#e7e5e4",
+                border: `2px solid ${imminent ? "#fecaca" : "#57534e"}`,
+                background: imminent ? "#ef4444" : "#292524", color: imminent ? "#fff" : "#d6d3d1",
                 fontWeight: 900, fontSize: imminent ? 19 : 13,
                 boxShadow: imminent ? "0 0 12px rgba(239,68,68,.8)" : "none",
+                animation: imminent ? "abyss-interrupt-pop .3s ease-out" : "none",
               }}>
                 <span style={{ fontSize: imminent ? 16 : 12 }}>🪓</span>{n}
               </div>
@@ -3683,9 +3686,13 @@ export default function HackRoguelike() {
               const est = estimateIntentDamage(enemy);
               const threshold = Math.ceil(enemy.maxHp * HEAVY_COUNTERPLAY.damageThreshold);
               return (
-                <div data-testid="execution-intent" style={{ marginTop: 8, fontSize: 16, fontWeight: 900, color: "#fecaca", background: "#1c0b0b", border: "2px solid #ef4444", borderRadius: 6, padding: "6px 14px", display: "inline-block" }}>
-                  <div>🪓 処刑 {est?.dmg ?? "?"}</div>
-                  <div data-testid="execution-threshold" style={{ fontSize: 12, fontWeight: 700, color: "#fca5a5", marginTop: 2 }}>1行動で{threshold}以上なら中断</div>
+                <div data-testid="execution-intent" style={{ marginTop: 10, display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "8px 18px", borderRadius: 10, border: "2px solid #ef4444", background: "#200606", boxShadow: "0 0 16px rgba(239,68,68,.45)" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, color: "#fecaca" }}>
+                    <span style={{ fontSize: 20 }}>🪓</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, opacity: .85 }}>処刑</span>
+                    <span style={{ fontSize: 26, fontWeight: 900 }}>{est?.dmg ?? "?"}</span>
+                  </div>
+                  <div data-testid="execution-threshold" style={{ fontSize: 11, fontWeight: 700, color: "#fca5a5" }}>1行動で{threshold}以上なら中断</div>
                 </div>
               );
             }
@@ -3718,9 +3725,9 @@ export default function HackRoguelike() {
             }
             if (!exposed) return null; // 通常の装甲状態では軽減率・装甲についての表示を出さない(攻撃/スキルボタンの予想ダメージ側で判断させる)
             const damagePercent = Math.round(previewPlayerAction(enemy, "attack").multiplier * 100);
-            return <div data-testid="combat-rhythm" style={{ marginTop: 6, padding: 7, borderRadius: 7, border: "1px solid #fbbf24", background: "#422006", boxShadow: "0 0 14px rgba(251,191,36,.35)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <span data-testid="damage-efficiency" style={{ color: "#fde047", fontSize: 18, fontWeight: 900 }}>💥 {damagePercent / 100}倍</span>
-              <span data-testid="armor-broken-badge" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", background: "#fbbf24", color: "#422006", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>①</span>
+            return <div data-testid="combat-rhythm" style={{ marginTop: 8, display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999, border: "1px solid #fbbf24", background: "#3a2308", boxShadow: "0 0 10px rgba(251,191,36,.4)" }}>
+              <span data-testid="damage-efficiency" style={{ color: "#fde047", fontSize: 15, fontWeight: 900 }}>💥 {damagePercent / 100}倍</span>
+              <span data-testid="armor-broken-badge" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", background: "#fbbf24", color: "#422006", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>①</span>
             </div>;
           })()}
           {enemy.guardTurns > 0 && <div style={{ fontSize: 11, color: "#60a5fa", marginTop: 4 }}>🛡️ 構え中(受けるダメージ-50%)</div>}
@@ -3786,8 +3793,8 @@ export default function HackRoguelike() {
           const interrupts = willInterruptExecution(range);
           return <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={{ ...btnStyle(false), opacity: buttonOpacity("attack"), minHeight: 58, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
             {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
-            <div>⚔️ 攻撃</div>
-            <div data-testid="attack-damage-preview" style={{ fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>
+            <div style={isExecutionerFight ? { fontSize: 11, fontWeight: 600, opacity: .85 } : undefined}>⚔️ 攻撃</div>
+            <div data-testid="attack-damage-preview" style={isExecutionerFight ? { fontSize: 17, fontWeight: 900, marginTop: 3 } : { fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>
             {damagePreviewCaption("attack") && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, "attack").multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption("attack")}</div>}
           </button>;
         })()}
@@ -3798,8 +3805,8 @@ export default function HackRoguelike() {
           const est = threat ? estimateIntentDamage(enemy) : null;
           return <button onClick={useDefend} disabled={defendDisabled} style={{ ...btnStyle(defendDisabled, "#1e40af"), opacity: buttonOpacity("defend"), minHeight: est ? 58 : undefined, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
             {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
-            <div>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</div>
-            {est && <div data-testid="defend-damage-preview" style={{ fontSize: 11, marginTop: 3 }}>被ダメ {est.def}</div>}
+            <div style={isExecutionerFight ? { fontSize: 11, fontWeight: 600, opacity: .85 } : undefined}>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</div>
+            {est && <div data-testid="defend-damage-preview" style={isExecutionerFight ? { fontSize: 17, fontWeight: 900, marginTop: 3 } : { fontSize: 11, marginTop: 3 }}>被ダメ {est.def}</div>}
           </button>;
         })()}
         <button data-testid="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={{ ...btnStyle(player.potions <= 0 || player.petrified, "#166534"), opacity: buttonOpacity("heal") }}>
@@ -3818,8 +3825,8 @@ export default function HackRoguelike() {
             return (
               <button data-testid={`skill-button-${k}`} key={k} onClick={() => castSkill(k)} disabled={dis} style={{ ...btnStyle(dis, "#7c2d12"), fontSize: 13, opacity: buttonOpacity(category), minHeight: 58, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
                 {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
-                <div>{s.icon} {s.name}{(player.skillMods || {})[k] ? SKILL_MODS[(player.skillMods || {})[k]].icon : ""}{cd > 0 ? ` (${cd})` : ""}</div>
-                {range && <div style={{ fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>}
+                <div style={isExecutionerFight ? { fontSize: 11, fontWeight: 600, opacity: .85 } : undefined}>{s.icon} {s.name}{(player.skillMods || {})[k] ? SKILL_MODS[(player.skillMods || {})[k]].icon : ""}{cd > 0 ? ` (${cd})` : ""}</div>
+                {range && <div style={isExecutionerFight ? { fontSize: 16, fontWeight: 900, marginTop: 3 } : { fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>}
                 {range && damagePreviewCaption(category) && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, category).multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption(category)}</div>}
               </button>
             );

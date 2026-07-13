@@ -37,7 +37,7 @@ test("鉄の処刑人: 大技防御だけが反撃態勢を付与し、次の直
   await patchTarget(page, "heavy");
   await expect(page.getByTestId("heavy-counterplay-hint")).toHaveCount(0);
   await expect(page.getByTestId("execution-countdown")).toContainText("1");
-  await expect(page.getByTestId("execution-intent")).toContainText("🪓 処刑");
+  await expect(page.getByTestId("execution-intent")).toContainText("処刑");
   await expect(page.getByTestId("execution-threshold")).toHaveText("1行動で200以上なら中断");
   await expect(page.getByTestId("combat-rhythm")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
