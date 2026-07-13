@@ -371,8 +371,15 @@ export default function HackRoguelike() {
   const [sandboxMode, setSandboxMode] = useState(false);
   const [sandboxConfig, setSandboxConfig] = useState({ enemy: "鉄の処刑人", floor: 10, cls: "warrior", blessing: "", contract: "none", equipment: "none", hp: 100, seed: 7001, patternIdx: 2, intent: "heavy" });
   const sandboxNativeRandom = useRef(null);
+  const sandboxSnapshot = useRef(null);
   useEffect(() => () => {
     if (sandboxNativeRandom.current) Math.random = sandboxNativeRandom.current;
+    if (sandboxSnapshot.current) {
+      ACTIVE_DIFF = sandboxSnapshot.current.activeDiff;
+      ACTIVE_MOD = sandboxSnapshot.current.activeMod;
+      ACTIVE_ASCENSION_FX = sandboxSnapshot.current.activeAscension;
+      ACTIVE_ZONE = sandboxSnapshot.current.activeZone;
+    }
   }, []);
   const pendingTurnRef = useRef(null); // 演出待ちの敵ターン(連打時は即時フラッシュして解決する)
   const popupIdRef = useRef(0);
@@ -575,15 +582,45 @@ export default function HackRoguelike() {
 
   const startSandboxCombat = (config = sandboxConfig) => {
     if (!sandboxEnabled) return false;
-    const cfg = { ...sandboxConfig, ...config };
+    const raw = { ...sandboxConfig, ...config };
+    const floorValue = Number(raw.floor);
+    const hpValue = Number(raw.hp);
+    const seedValue = Number(raw.seed);
+    const patternValue = Number(raw.patternIdx);
+    const cfg = {
+      ...raw,
+      cls: Object.hasOwn(CLASSES, raw.cls) ? raw.cls : "warrior",
+      floor: Number.isFinite(floorValue) ? Math.max(1, Math.min(999, Math.trunc(floorValue))) : 1,
+      hp: Number.isFinite(hpValue) ? Math.max(1, Math.min(100, hpValue)) : 100,
+      seed: Number.isFinite(seedValue) ? (Math.trunc(seedValue) >>> 0) : 7001,
+      patternIdx: Number.isFinite(patternValue) ? Math.max(0, Math.min(999, Math.trunc(patternValue))) : 0,
+      intent: Object.hasOwn(INTENTS, raw.intent) ? raw.intent : "attack",
+      equipment: ["none", "offense", "defense"].includes(raw.equipment) ? raw.equipment : "none",
+      blessing: BLESSINGS.some(item => item.key === raw.blessing) ? raw.blessing : "",
+      contract: BLESSINGS.some(item => item.key === raw.contract) ? raw.contract : "none",
+    };
+    if (!sandboxSnapshot.current) sandboxSnapshot.current = {
+      player, equip, floor, enemy, log, cds, kills, best,
+      activeDiff: ACTIVE_DIFF, activeMod: ACTIVE_MOD, activeAscension: ACTIVE_ASCENSION_FX, activeZone: ACTIVE_ZONE,
+    };
     setSandboxConfig(cfg);
     setSandboxMode(true);
     ACTIVE_DIFF = DIFFICULTIES.normal;
     ACTIVE_MOD = getMod("none");
     ACTIVE_ASCENSION_FX = {};
     ACTIVE_ZONE = ZONES.entrance;
-    const cls = CLASSES[cfg.cls] || CLASSES.warrior;
-    let p = cls.base(newPlayer());
+    const cls = CLASSES[cfg.cls];
+    let p;
+    let e;
+    let sandboxEquip;
+    let base;
+    if (!sandboxNativeRandom.current) sandboxNativeRandom.current = Math.random;
+    const restoreRandom = sandboxNativeRandom.current;
+    let seed = cfg.seed;
+    Math.random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+    try {
+    if (cfg.__testThrowAfterRandom && window.__abyssTestFast === true) throw new Error("sandbox test failure");
+    p = cls.base(newPlayer());
     p.cls = cfg.cls;
     p.variant = "a";
     p.diff = "normal";
@@ -591,21 +628,36 @@ export default function HackRoguelike() {
     p.skills = [cls.skill]; p.knownSkills = [cls.skill]; p.skillMods = {}; p.hooks = {}; p.ascension = [];
     for (const key of [cfg.blessing, cfg.contract]) {
       const blessing = BLESSINGS.find(item => item.key === key);
-      if (blessing?.apply) p = blessing.apply(p);
+      if (!blessing) continue;
+      p.blessing = blessing.key;
+      if (blessing.apply) p = blessing.apply(p);
+      if (blessing.learnSkill && !p.knownSkills.includes(blessing.learnSkill)) {
+        p.knownSkills = [...p.knownSkills, blessing.learnSkill];
+        p.skills = [...p.skills, blessing.learnSkill];
+      }
     }
-    const sandboxEquip = { weapon: null, armor: null, helmet: null, boots: null, ring: null, amulet: null };
+    sandboxEquip = { weapon: null, armor: null, helmet: null, boots: null, ring: null, amulet: null };
     if (cfg.equipment === "offense") sandboxEquip.weapon = { slot: "weapon", rarity: 0, name: "訓練用大剣", stats: { atk: 25 }, curse: null };
     if (cfg.equipment === "defense") sandboxEquip.armor = { slot: "armor", rarity: 0, name: "訓練用重鎧", stats: { def: 20, hp: 50 }, curse: null };
     const candidates = [...ENEMIES, ...ALL_BOSSES];
-    const base = candidates.find(item => item.name === cfg.enemy) || BOSS_POOLS[1].find(item => item.counterplay === "heavy-v1");
-    if (!sandboxNativeRandom.current) sandboxNativeRandom.current = Math.random;
-    let seed = Number(cfg.seed) >>> 0;
-    Math.random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
-    let e = genEnemy(Math.max(1, Number(cfg.floor) || 1));
-    e = { ...e, ...base, codexId: base.name, hp: e.maxHp, patternIdx: Math.max(0, Number(cfg.patternIdx) || 0), intent: cfg.intent || "attack", status: {}, guardTurns: 0 };
+    base = candidates.find(item => item.name === cfg.enemy) || BOSS_POOLS[1].find(item => item.counterplay === "heavy-v1");
+    cfg.enemy = base.name;
+    e = genEnemy(cfg.floor);
+    e = { ...e, ...base, codexId: base.name, hp: e.maxHp, patternIdx: cfg.patternIdx, intent: cfg.intent, status: {}, guardTurns: 0 };
     const maxHp = totalStats(p, sandboxEquip).maxHp;
-    p.hp = Math.max(1, Math.min(maxHp, Math.round(maxHp * Math.max(1, Math.min(100, Number(cfg.hp) || 100)) / 100)));
-    setEquip(sandboxEquip); setPlayer(p); setEnemy(e); setFloor(Number(cfg.floor) || 1); setKills(0); setCds({});
+    p.hp = Math.max(1, Math.min(maxHp, Math.round(maxHp * cfg.hp / 100)));
+    } catch (error) {
+      Math.random = restoreRandom;
+      sandboxNativeRandom.current = null;
+      const snapshot = sandboxSnapshot.current;
+      if (snapshot) {
+        ACTIVE_DIFF = snapshot.activeDiff; ACTIVE_MOD = snapshot.activeMod; ACTIVE_ASCENSION_FX = snapshot.activeAscension; ACTIVE_ZONE = snapshot.activeZone;
+      }
+      sandboxSnapshot.current = null;
+      setSandboxMode(false);
+      throw error;
+    }
+    setEquip(sandboxEquip); setPlayer(p); setEnemy(e); setFloor(cfg.floor); setKills(0); setCds({});
     setDrop(null); setShopItem(null); setTurnPending(false); setEnemyPopups([]); setPlayerPopups([]);
     setLog([{ t: `🧪 サンドボックス: ${base.name} / seed ${cfg.seed}`, c: "info" }]);
     setScene("combat");
@@ -616,6 +668,13 @@ export default function HackRoguelike() {
       Math.random = sandboxNativeRandom.current;
       sandboxNativeRandom.current = null;
     }
+    const snapshot = sandboxSnapshot.current;
+    if (snapshot) {
+      setPlayer(snapshot.player); setEquip(snapshot.equip); setFloor(snapshot.floor); setEnemy(snapshot.enemy);
+      setLog(snapshot.log); setCds(snapshot.cds); setKills(snapshot.kills); setBest(snapshot.best);
+      ACTIVE_DIFF = snapshot.activeDiff; ACTIVE_MOD = snapshot.activeMod; ACTIVE_ASCENSION_FX = snapshot.activeAscension; ACTIVE_ZONE = snapshot.activeZone;
+    }
+    sandboxSnapshot.current = null;
     setSandboxMode(false);
     setScene("title");
   };
@@ -999,7 +1058,7 @@ export default function HackRoguelike() {
           p = { ...p, hp: 1, cheatDeathUsed: true };
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
         } else {
-          setPlayer(p); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return;
+          setPlayer(p); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return;
         }
       }
     }
@@ -2104,7 +2163,7 @@ export default function HackRoguelike() {
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
           SFX.levelup();
         } else {
-          setEnemy({ ...eAfterOwn }); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
+          setEnemy({ ...eAfterOwn }); setPlayer(pp); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
       if (eAfterOwn.hp <= 0) { setEnemy({ ...eAfterOwn }); pushEnemyPopups(enemyStatusLog); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
@@ -2189,7 +2248,7 @@ export default function HackRoguelike() {
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
           SFX.levelup();
         } else {
-          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
+          setEnemy(eAfterOwn); setPlayer(pp); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
       if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
@@ -2261,7 +2320,7 @@ export default function HackRoguelike() {
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
           SFX.levelup();
         } else {
-          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
+          setEnemy(eAfterOwn); setPlayer(pp); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
       if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
@@ -2325,7 +2384,7 @@ export default function HackRoguelike() {
           addLog(`✨ 不滅の約束が発動！死の淵から生還した`, "gold");
           SFX.levelup();
         } else {
-          setEnemy(eAfterOwn); setPlayer(pp); setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
+          setEnemy(eAfterOwn); setPlayer(pp); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
       if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
@@ -2635,7 +2694,7 @@ export default function HackRoguelike() {
           <label style={{ fontSize: 12 }}>予告<select data-testid="sandbox-intent" value={sandboxConfig.intent} onChange={event => update("intent", event.target.value)} style={field}>{Object.entries(INTENTS).map(([key, value]) => <option key={key} value={key}>{value.icon}{value.name}</option>)}</select></label>
         </div>
         <button data-testid="sandbox-start" onClick={() => startSandboxCombat()} style={{ ...btnStyle(false, "#0e7490"), width: "100%", marginTop: 16 }}>この条件で戦闘開始</button>
-        <button onClick={leaveSandbox} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>タイトルへ戻る</button>
+        <button data-testid="sandbox-exit" onClick={leaveSandbox} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>タイトルへ戻る</button>
       </div>
     );
   }
@@ -2644,7 +2703,7 @@ export default function HackRoguelike() {
     <div data-testid="sandbox-result" style={{ ...wrap, textAlign: "center" }}>
       <h2 style={{ color: "#fbbf24" }}>🧪 戦闘終了</h2>
       <button data-testid="sandbox-retry" onClick={() => startSandboxCombat()} style={{ ...btnStyle(false, "#0e7490"), width: "100%" }}>同じ条件で再戦</button>
-      <button onClick={() => setScene("sandbox")} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>条件を変更</button>
+      <button data-testid="sandbox-change" onClick={() => setScene("sandbox")} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>条件を変更</button>
     </div>
   );
 
