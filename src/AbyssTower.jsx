@@ -17,6 +17,13 @@ import {
   resolvePlayerOngoingEffects,
   rollAdditionalHits,
 } from "./game/combat.js";
+import {
+  consumeRiposte,
+  grantRiposte,
+  HEAVY_COUNTERPLAY,
+  isHeavyCounterplay,
+  resolveHeavyCounterplay,
+} from "./game/heavyCounterplay.js";
 
 let ACTIVE_DIFF = DIFFICULTIES.normal;
 
@@ -579,6 +586,7 @@ export default function HackRoguelike() {
       mult *= 1.15; notes.push("防御反撃+15%");
       if (stats.afterDefendDmg > 0) { mult *= 1 + stats.afterDefendDmg / 100; notes.push(`防御後火力+${stats.afterDefendDmg}%`); }
     }
+    if (player.heavyRiposte) { mult *= 1.3; notes.push("反撃態勢+30%"); }
     if (player.cls === "vampire" && player.variant === "b" && stats.maxHp > 0 && player.hp / stats.maxHp <= 0.5) { mult *= 1.25; notes.push("血の対価+25%"); }
     if (stats.berserk > 0) { mult *= 1.25; notes.push("狂戦士+25%"); }
     if (stats.bossSlayer > 0 && enemy && (enemy.isBoss || enemy.isElite)) { mult *= 1 + stats.bossSlayer / 100; notes.push(`王殺し+${stats.bossSlayer}%`); }
@@ -664,6 +672,13 @@ export default function HackRoguelike() {
       }
     }
     if (enemyEffects.stopReason === "enemyDead") return p; // 継続ダメージで撃破
+    if (e.heavyCounterplayInterrupt) {
+      e.counterplayOutcome = e.heavyCounterplayInterrupt;
+      delete e.heavyCounterplayInterrupt;
+      e.intent = rollIntent(e);
+      if (p.defending) p = { ...p, defending: false };
+      return p;
+    }
     if (enemyEffects.incapacitated) {
       addLog(`${e.name}は動けない！(${INTENTS[e.intent].icon}${INTENTS[e.intent].name}は持ち越し)`, "info");
       return p;
@@ -701,6 +716,7 @@ export default function HackRoguelike() {
     }
     // ===== 予告していたインテントを実行 =====
     const act = e.intent || "attack";
+    let defendedHeavyDamage = false;
     if (act === "guard") {
       e.guardTurns = 1; // プレイヤーの次の攻撃ターンの間、被ダメ-50%
       addLog(`🛡️ ${e.name}は構えを取った(次に受けるダメージ-50%)`, "info");
@@ -752,7 +768,10 @@ export default function HackRoguelike() {
         if (hasNode(player, "v10") && player.cls === "vampire" && (p.barrier || 0) >= 1) dmg = Math.max(1, Math.round(dmg * 0.9)); // 渇きの守り
         // 魔弾(魔導士):大技は防御を貫通しやすい(-60%→-30%)
         const defendMult = e.gimmick === "arcane" && act === "heavy" ? 0.7 : (stats.betterDefend > 0 ? 0.2 : 0.4);
-        if (p.defending) dmg = Math.max(1, Math.round(dmg * defendMult)); // 防御中(不動の鎧なら-80%)
+        if (p.defending) {
+          dmg = Math.max(1, Math.round(dmg * defendMult)); // 防御中(不動の鎧なら-80%)
+          if (act === "heavy" && isHeavyCounterplay(e)) defendedHeavyDamage = true;
+        }
         if (stats.dmgCapPercent > 0) dmg = Math.min(dmg, Math.max(1, Math.round(stats.maxHp * stats.dmgCapPercent / 100))); // 絶対防御:被弾上限
         // 報復の構え(w10): 大技を受けたら次の攻撃が確定クリになるフラグを立てる
         if (act === "heavy" && hasNode(player, "w10") && player.cls === "warrior") p = { ...p, tookHeavyLast: true };
@@ -836,6 +855,13 @@ export default function HackRoguelike() {
       } else if (act === "venom" && p.defending) {
         addLog(`🛡️ 防御で毒を防いだ！`, "info");
       }
+    }
+    if (defendedHeavyDamage) {
+      p = grantRiposte(p);
+      e.counterplayOutcome = "defend";
+      addLog("🛡️ 大技を防御！ 反撃態勢を獲得", "gold");
+    } else if (isHeavyCounterplay(e)) {
+      e.counterplayOutcome = "unanswered";
     }
     // 次のターンの行動を予告
     e.intent = rollIntent(e);
@@ -1672,9 +1698,14 @@ export default function HackRoguelike() {
     if (flushed?.terminal) return;
     const basePlayer = flushed ? flushed.player : player;
     const baseEnemy = flushed ? flushed.enemy : enemy;
+    const counterplayEnemyBefore = { ...baseEnemy, status: baseEnemy.status ? Object.fromEntries(Object.entries(baseEnemy.status).map(([k, v]) => [k, { ...v }])) : undefined };
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
     let p = { ...basePlayer };
+    if (e.name === HEAVY_COUNTERPLAY.enemyName) delete e.counterplayOutcome;
     if (p.petrified) p = { ...p, petrified: false }; // 石化は攻撃行動で解ける
+    const riposte = consumeRiposte(p);
+    p = riposte.nextPlayer;
+    if (riposte.consumed) addLog("⚔️ 反撃態勢を解放！ 次の直接攻撃+30%", "gold");
     const catalystBoost = !!p.nextAtkDouble;
     if (catalystBoost) p.nextAtkDouble = false;
     const mod = usedSkill ? (player.skillMods || {})[usedSkill] : null;
@@ -1704,6 +1735,7 @@ export default function HackRoguelike() {
     const reso = player.cls === "mage" ? (p.resonance || 0) : 0;
     let critLanded = false;
     let totalDmg = 0;
+    let counterplayDirectDamage = 0;
     let hitsDone = 0, critCount = 0;
     let reflectSum = 0; // 鏡の回廊:敵の棘の蓄積
     const hitLog = []; // ダメージポップ用(TASK-009)
@@ -1748,6 +1780,7 @@ export default function HackRoguelike() {
       if (stats.basicBonus > 0 && !usedSkill) mult *= 1 + stats.basicBonus / 100; // 無音の誓い:通常攻撃強化
       if (stats.chaosDice > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.66;    // 深淵の賽(契約)
       if (catalystBoost) mult *= 2;                                        // 錬金の契約:回復薬直後の一撃
+      mult *= riposte.multiplier;                                          // 鉄の処刑人:大技防御後の反撃態勢
       mult *= frenzyDamageMultiplier(p.hp, stats.maxHp, stats.wrathHp > 0); // 狂血の契約:失ったHPによる追加分
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
@@ -1772,6 +1805,7 @@ export default function HackRoguelike() {
       }
       e.hp -= dmg;
       totalDmg += dmg;
+      counterplayDirectDamage += dmg;
       if (dmg > 0) hitLog.push({ dmg, crit: isCrit }); // ダメージポップ用(TASK-009)
       if (e.gimmick === "mirrorimg") e.mirrorStore = dmg; // 鏡霊:直前の一撃を記憶(次の敵ターンで跳ね返す)
       if (ACTIVE_ZONE.enemyThorns && dmg > 0) reflectSum += Math.round(4 + floor * 1.2); // 鏡の回廊:敵も棘をまとう
@@ -1864,6 +1898,7 @@ export default function HackRoguelike() {
       } else if (reso > 0 && e.hp > 0) {
         const burst = Math.round(stats.atk * 0.4 * reso);
         e.hp -= burst;
+        counterplayDirectDamage += burst;
         resoRelease = reso;
         // 二重詠唱(m10): 20%の確率で共鳴を消費せず維持
         const kept = hasNode(player, "m10") && Math.random() < 0.2;
@@ -1953,6 +1988,17 @@ export default function HackRoguelike() {
         applyStatus(e, "burn", 3);
         addLog(`🔥 魔力で${e.name}が燃え上がる！`, "dmg");
       }
+    }
+    const counterplay = resolveHeavyCounterplay({
+      enemyBefore: counterplayEnemyBefore,
+      enemyAfter: e,
+      directDamage: counterplayDirectDamage,
+    });
+    if (counterplay.interrupted) {
+      e.heavyCounterplayInterrupt = counterplay.method;
+      if (counterplay.method === "damage") addLog("💥 大技を火力で中断！", "gold");
+      else addLog(`❄️ 大技を${counterplay.ccType === "stun" ? "気絶" : "凍結"}で中断！`, "gold");
+      SFX.crit();
     }
     SFX[critLanded ? "crit" : usedSkill ? "skill" : "attack"]();
     const critCdCut = critLanded && stats.onCritCd > 0 && Math.random() < 0.4 ? 1 : 0;
@@ -2079,6 +2125,7 @@ export default function HackRoguelike() {
     if (flushed?.terminal) return;
     const basePlayer = flushed ? flushed.player : player;
     const baseEnemy = flushed ? flushed.enemy : enemy;
+    const counterplayEnemyBefore = { ...baseEnemy, status: baseEnemy.status ? Object.fromEntries(Object.entries(baseEnemy.status).map(([k, v]) => [k, { ...v }])) : undefined };
     let p = { ...basePlayer, defending: true, defendedLast: true };
     if (player.cls === "warrior") {
       const fCap = player.variant === "b" ? 7 : 5;
@@ -2088,6 +2135,7 @@ export default function HackRoguelike() {
     SFX.defend();
     addLog(`🛡️ 防御の構えを取った(このターン被ダメ${stats.betterDefend > 0 ? "-80%" : "-60%"}・次のターン与ダメ+15%)`, "info");
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
+    if (e.name === HEAVY_COUNTERPLAY.enemyName) delete e.counterplayOutcome;
     // 防御時凍結(氷の心臓・霜纏い)
     const freezeCh = (stats.onDefendFreezeCh || 0) + (player.cls === "mage" && player.variant === "b" ? 35 : 0);
     if (freezeCh > 0 && Math.random() * 100 < freezeCh) {
@@ -2098,6 +2146,12 @@ export default function HackRoguelike() {
     if (stats.onDefendWeaken > 0) {
       applyStatus(e, "weaken", 2, 15 + (stats.weakenPower || 0));
       addLog(`⛓️ 構えが${e.name}の力を封じた…`, "dmg");
+    }
+    const counterplay = resolveHeavyCounterplay({ enemyBefore: counterplayEnemyBefore, enemyAfter: e, directDamage: 0 });
+    if (counterplay.interrupted) {
+      e.heavyCounterplayInterrupt = counterplay.method;
+      addLog(`❄️ 大技を${counterplay.ccType === "stun" ? "気絶" : "凍結"}で中断！`, "gold");
+      SFX.crit();
     }
     if (e.guardTurns > 0) e.guardTurns--;
     // 棘ビルド:防御は反撃も兼ねる。敵が何をしてきたかに関わらず必ず棘が発動する
@@ -3279,6 +3333,11 @@ export default function HackRoguelike() {
               </div>
             );
           })()}
+          {isHeavyCounterplay(enemy) && (
+            <div data-testid="heavy-counterplay-hint" style={{ marginTop: 6, fontSize: 11, color: "#fde68a", lineHeight: 1.5 }}>
+              🛡️ 防御で受け流し反撃態勢　💥 1行動で最大HP20%以上の直接ダメージ　❄️ 新規・延長の気絶/凍結で中断
+            </div>
+          )}
           {enemy.guardTurns > 0 && <div style={{ fontSize: 11, color: "#60a5fa", marginTop: 4 }}>🛡️ 構え中(受けるダメージ-50%)</div>}
           {enemy.status && Object.entries(enemy.status).some(([, v]) => v.turns > 0) && (
             <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 6, flexWrap: "wrap" }}>
