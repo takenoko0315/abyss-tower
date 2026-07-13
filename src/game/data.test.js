@@ -37,6 +37,10 @@ describe("キーの一意性", () => {
     const bossNames = ALL_BOSSES.map(b => b.name);
     expect(new Set(bossNames).size).toBe(bossNames.length);
   });
+  it("大技対処実験キーは鉄の処刑人だけに設定される", () => {
+    const configured = ALL_BOSSES.filter(enemy => enemy.counterplay === "heavy-v1");
+    expect(configured.map(enemy => enemy.name)).toEqual(["鉄の処刑人"]);
+  });
 });
 
 describe("TASK-014 contracts", () => {

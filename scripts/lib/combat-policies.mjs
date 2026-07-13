@@ -3,6 +3,7 @@
 // { action: "attack" | "defend" | "potion" | "skill", skillKey? } を返す純粋関数。
 // DOM操作やjsdomに依存しないため、vitestで直接ユニットテストできる。
 import { SKILLS } from "../../src/game/data.js";
+import { HEAVY_COUNTERPLAY, isHeavyCounterplay } from "../../src/game/heavyCounterplay.js";
 
 // SKILLSをspecの性質で分類しておく(データを増やしても自動で追従する)
 const DAMAGE_SKILLS = new Set(
@@ -39,6 +40,23 @@ function pickBestDamageSkill(keys) {
     if (scoreB !== scoreA) return scoreB - scoreA;
     return a < b ? -1 : 1;
   })[0];
+}
+
+function deterministicCcSkills(player, cds, stats) {
+  return (player.skills || []).filter(key => {
+    const type = SKILLS[key]?.spec?.applyStatus?.type;
+    return ["freeze", "stun"].includes(type) && isSkillUsable(player, cds, stats, key);
+  });
+}
+
+function expectedHeavyInterruptAction(player, cds, stats, enemy) {
+  const threshold = Math.max(0, enemy.maxHp || 0) * HEAVY_COUNTERPLAY.damageThreshold;
+  const guaranteedExtraHits = (stats.noDouble || 0) > 0 ? 0 : Math.floor(Math.max(0, stats.double || 0) / 100);
+  const damageSkills = usableSkillsOfKind(player, cds, stats, DAMAGE_SKILLS)
+    .filter(key => Math.max(0, Math.round((stats.atk - 1) * SKILLS[key].spec.mult)) * ((SKILLS[key].spec.hits || 1) + guaranteedExtraHits) >= threshold);
+  if (damageSkills.length) return { action: "skill", skillKey: pickBestDamageSkill(damageSkills) };
+  if (Math.max(0, stats.atk - 1) * (1 + guaranteedExtraHits) >= threshold) return { action: "attack" };
+  return null;
 }
 
 const isBigThreat = (enemy) => enemy?.intent === "heavy" || enemy?.intent === "flurry";
@@ -100,6 +118,15 @@ export function strategicPolicy(d) {
   const usableCC = usableSkillsOfKind(player, cds, stats, CC_SKILLS);
   const usableStance = usableSkillsOfKind(player, cds, stats, STANCE_SKILLS);
   const usableDamage = usableSkillsOfKind(player, cds, stats, DAMAGE_SKILLS);
+
+  if (isHeavyCounterplay(enemy)) {
+    const certainCc = deterministicCcSkills(player, cds, stats);
+    if (certainCc.length) return { action: "skill", skillKey: certainCc[0] };
+    const damageInterrupt = expectedHeavyInterruptAction(player, cds, stats, enemy);
+    if (damageInterrupt) return damageInterrupt;
+    if (!noDefend) return { action: "defend" };
+    return { action: "attack" };
+  }
 
   // A: 緊急回復(HP25%以下) — 回復スキルがあれば温存中の回復薬より優先
   if (hpPct <= 0.25) {
@@ -166,4 +193,4 @@ export function decisionCandidates(decision, d) {
 }
 
 // 計測(combat-decision-worker-core.mjs)用に分類集合とヘルパーも公開する
-export { DAMAGE_SKILLS, CC_SKILLS, STANCE_SKILLS, HEAL_SKILLS, isSkillUsable, usableSkillsOfKind, pickBestDamageSkill, isBigThreat };
+export { DAMAGE_SKILLS, CC_SKILLS, STANCE_SKILLS, HEAL_SKILLS, isSkillUsable, usableSkillsOfKind, pickBestDamageSkill, isBigThreat, deterministicCcSkills, expectedHeavyInterruptAction };
