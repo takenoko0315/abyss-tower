@@ -119,6 +119,29 @@ export function strategicPolicy(d) {
   const usableStance = usableSkillsOfKind(player, cds, stats, STANCE_SKILLS);
   const usableDamage = usableSkillsOfKind(player, cds, stats, DAMAGE_SKILLS);
 
+  const rhythm = enemy?.combatRhythm;
+  const rhythmState = enemy?.rhythmState || {};
+  if (rhythm === "executioner") {
+    if (rhythmState.phase === "exposed" && usableDamage.length) return { action: "skill", skillKey: pickBestDamageSkill(usableDamage) };
+    if (rhythmState.phase === "armored" && !rhythmState.parryReady && !noDefend) return { action: "defend" };
+    if (rhythmState.parryReady && enemy.intent === "heavy" && !noDefend) return { action: "defend" };
+  }
+  if (rhythm === "dragon") {
+    if (rhythmState.phase === "overheated") return usableDamage.length ? { action: "skill", skillKey: pickBestDamageSkill(usableDamage) } : { action: "attack" };
+    if (rhythmState.phase === "flying") {
+      if (hpPct <= 0.75 && usableHeal.length) return { action: "skill", skillKey: usableHeal[0] };
+      if (hpPct <= 0.75 && player.potions > 0) return { action: "potion" };
+      if (!noDefend) return { action: "defend" };
+    }
+  }
+  if (rhythm === "crystal" && rhythmState.phase !== "exposed") {
+    const last = rhythmState.lastCategory;
+    if (last !== "defend" && !noDefend) return { action: "defend" };
+    if (last !== "skill" && usableDamage.length) return { action: "skill", skillKey: pickBestDamageSkill(usableDamage) };
+    if (last !== "heal" && hpPct < 0.9 && player.potions > 0) return { action: "potion" };
+    return { action: "attack" };
+  }
+
   if (isHeavyCounterplay(enemy)) {
     const certainCc = deterministicCcSkills(player, cds, stats);
     if (certainCc.length) return { action: "skill", skillKey: certainCc[0] };

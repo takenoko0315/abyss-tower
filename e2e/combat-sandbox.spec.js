@@ -85,6 +85,31 @@ test("同seed・同操作列の戦闘結果を再現する", async ({ page }) =>
   expect(second).toEqual(first);
 });
 
+test("全装備プリセットを6部位の完成装備で開始できる", async ({ page }) => {
+  const presets = ["standard10", "highDamage", "defenseRiposte", "cc", "status", "sustain"];
+  for (const equipment of presets) {
+    await page.evaluate(value => window.__abyssE2E.startSandboxCombat({ equipment: value, cls: value === "cc" ? "mage" : value === "status" ? "assassin" : "warrior" }), equipment);
+    const state = await page.evaluate(() => ({ equip: window.__abyssDebug.equip, player: window.__abyssDebug.player, stats: window.__abyssDebug.stats }));
+    expect(Object.values(state.equip).filter(Boolean), equipment).toHaveLength(6);
+    expect(state.stats.maxHp, equipment).toBeGreaterThan(100);
+    expect(state.stats.atk, equipment).toBeGreaterThan(20);
+    expect(state.player.skills.length, equipment).toBeGreaterThan(0);
+  }
+});
+
+test("事前プレビューと手動調整を表示し、不正値を安全に正規化する", async ({ page }) => {
+  await page.getByTestId("open-combat-sandbox").click();
+  await expect(page.getByTestId("sandbox-preview")).toContainText("最大HP");
+  await expect(page.getByTestId("sandbox-preview")).toContainText("直接ダメージ倍率");
+  await page.evaluate(() => window.__abyssE2E.startSandboxCombat({ equipment: "standard10", atkMult: Infinity, hpMult: NaN, defMult: -1, potions: -5, skillCd: Infinity }));
+  const state = await page.evaluate(() => ({ player: window.__abyssDebug.player, stats: window.__abyssDebug.stats, cds: window.__abyssDebug.cds }));
+  expect(state.player.potions).toBe(0);
+  expect(state.stats.atk).toBeGreaterThan(0);
+  expect(state.stats.maxHp).toBeGreaterThan(0);
+  expect(state.stats.def).toBeGreaterThan(0);
+  expect(Object.values(state.cds).every(value => value === 0)).toBe(true);
+});
+
 test("明示フラグがなければサンドボックスUIとAPIを公開しない", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("open-combat-sandbox")).toHaveCount(0);

@@ -26,6 +26,25 @@ describe("attackOnlyPolicy", () => {
   });
 });
 
+describe("strategic combat rhythms", () => {
+  it("処刑人の装甲中は攻撃せず受け流し準備をする", () => {
+    const enemy = { combatRhythm: "executioner", rhythmState: { phase: "armored", parryReady: false }, intent: "attack", hp: 100, maxHp: 100, status: {} };
+    expect(strategicPolicy(makeState({ skills: ["strike"], enemy }))).toEqual({ action: "defend" });
+  });
+
+  it("古竜の飛翔中は防御し、過熱中は攻撃スキルを使う", () => {
+    const flying = { combatRhythm: "dragon", rhythmState: { phase: "flying", actionsLeft: 2 }, intent: "attack", hp: 100, maxHp: 100, status: {} };
+    expect(strategicPolicy(makeState({ skills: ["strike"], enemy: flying }))).toEqual({ action: "defend" });
+    const hot = { ...flying, rhythmState: { phase: "overheated", actionsLeft: 2 } };
+    expect(strategicPolicy(makeState({ skills: ["strike"], enemy: hot }))).toEqual({ action: "skill", skillKey: "strike" });
+  });
+
+  it("結晶では直前と違うカテゴリを選ぶ", () => {
+    const enemy = { combatRhythm: "crystal", rhythmState: { phase: "barrier", lastCategory: "defend", categories: ["defend"] }, intent: "attack", hp: 100, maxHp: 100, status: {} };
+    expect(strategicPolicy(makeState({ skills: ["strike"], enemy }))).toEqual({ action: "skill", skillKey: "strike" });
+  });
+});
+
 describe("decisionCandidates", () => {
   it("通常攻撃不能時にも利用可能な行動へ決定的にフォールバックできる", () => {
     const state = makeState({ hp: 20, potions: 1, skills: ["strike"], cds: { strike: 0 } });

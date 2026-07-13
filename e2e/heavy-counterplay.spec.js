@@ -35,7 +35,11 @@ test("鉄の処刑人: 大技防御だけが反撃態勢を付与し、次の直
   expect((await state(page)).player.heavyRiposte).toBeFalsy();
 
   await patchTarget(page, "heavy");
-  await expect(page.getByTestId("heavy-counterplay-hint")).toBeVisible();
+  await expect(page.getByTestId("heavy-counterplay-hint")).toHaveCount(0);
+  await expect(page.getByTestId("execution-countdown")).toContainText("1");
+  await expect(page.getByTestId("execution-intent")).toContainText("処刑");
+  await expect(page.getByTestId("execution-threshold")).toHaveText("1行動で200以上なら中断");
+  await expect(page.getByTestId("combat-rhythm")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByRole("button", { name: /防御/ }).click();
   await expect.poll(async () => (await state(page)).player.heavyRiposte).toBe(true);
@@ -54,9 +58,23 @@ test("鉄の処刑人: 1行動で最大HP20%以上の直接ダメージを与え
   await patchTarget(page, "heavy");
   await page.evaluate(() => window.__abyssE2E.patchPlayer({ atk: 250 }));
   const hpBefore = (await state(page)).player.hp;
+  await expect(page.getByTestId("attack-button").getByTestId("interrupt-badge")).toBeVisible();
   await page.getByTestId("attack-button").click();
   await expect.poll(async () => (await state(page)).enemy.counterplayOutcome).toBe("damage");
   expect((await state(page)).enemy.intent).toBe("attack");
+  expect((await state(page)).player.hp).toBe(hpBefore);
+});
+
+test("鉄の処刑人: 防御可能でも確定CCで処刑を中断できる", async ({ page }) => {
+  await page.addInitScript(() => { localStorage.clear(); window.__abyssTestFast = true; });
+  await page.goto("/?combatSandbox=1");
+  await expect.poll(() => page.evaluate(() => Boolean(window.__abyssE2E?.startSandboxCombat))).toBe(true);
+  await page.evaluate(() => window.__abyssE2E.startSandboxCombat({ enemy: "鉄の処刑人", cls: "mage", equipment: "cc", intent: "heavy", rhythmPhase: "default", seed: 7001 }));
+  const hpBefore = (await state(page)).player.hp;
+  await expect(page.getByTestId("skill-button-frostnova").getByTestId("interrupt-badge")).toBeVisible();
+  await page.getByTestId("skill-button-frostnova").click();
+  await expect.poll(async () => (await state(page)).enemy.counterplayOutcome).toBe("cc");
+  expect((await state(page)).enemy.rhythmState.phase).toBe("exposed");
   expect((await state(page)).player.hp).toBe(hpBefore);
 });
 

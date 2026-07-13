@@ -41,6 +41,11 @@ describe("キーの一意性", () => {
     const configured = ALL_BOSSES.filter(enemy => enemy.counterplay === "heavy-v1");
     expect(configured.map(enemy => enemy.name)).toEqual(["鉄の処刑人"]);
   });
+
+  it("戦闘リズム設定は対象3体だけに存在する", () => {
+    const configured = [...ENEMIES, ...ALL_BOSSES].filter(enemy => enemy.combatRhythm);
+    expect(configured.map(enemy => enemy.name).sort()).toEqual(["鉄の処刑人", "古竜", "共鳴クリスタル"].sort());
+  });
 });
 
 describe("TASK-014 contracts", () => {
