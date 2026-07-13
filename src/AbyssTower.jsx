@@ -25,7 +25,6 @@ import {
   isHeavyCounterplayEnemy,
   resolveHeavyCounterplay,
 } from "./game/heavyCounterplay.js";
-import { advanceCombatRhythm, directDamageMultiplier, getCombatRhythm, initializeCombatRhythm } from "./game/combatRhythm.js";
 
 let ACTIVE_DIFF = DIFFICULTIES.normal;
 
@@ -187,7 +186,7 @@ function genEnemy(floor, elite = false, traitKey = null) {
   if (isFinal) { e.pattern = base.pattern; e.patternIdx = 0; }
   else if (isBoss) { e.pattern = base.pattern || BOSS_PATTERNS[(Math.floor(floor / 5) - 1 + BOSS_PATTERNS.length) % BOSS_PATTERNS.length]; e.patternIdx = 0; }
   e.intent = rollIntent(e);
-  return initializeCombatRhythm(e);
+  return e;
 }
 
 // 激昂(オーク)込みの実効攻撃倍率。予告ダメージ表示と実処理で共有する
@@ -603,7 +602,7 @@ export default function HackRoguelike() {
     let seed = Number(cfg.seed) >>> 0;
     Math.random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
     let e = genEnemy(Math.max(1, Number(cfg.floor) || 1));
-    e = initializeCombatRhythm({ ...e, ...base, codexId: base.name, hp: e.maxHp, patternIdx: Math.max(0, Number(cfg.patternIdx) || 0), intent: cfg.intent || "attack", status: {}, guardTurns: 0 });
+    e = { ...e, ...base, codexId: base.name, hp: e.maxHp, patternIdx: Math.max(0, Number(cfg.patternIdx) || 0), intent: cfg.intent || "attack", status: {}, guardTurns: 0 };
     const maxHp = totalStats(p, sandboxEquip).maxHp;
     p.hp = Math.max(1, Math.min(maxHp, Math.round(maxHp * Math.max(1, Math.min(100, Number(cfg.hp) || 100)) / 100)));
     setEquip(sandboxEquip); setPlayer(p); setEnemy(e); setFloor(Number(cfg.floor) || 1); setKills(0); setCds({});
@@ -1858,7 +1857,7 @@ export default function HackRoguelike() {
       mult *= frenzyDamageMultiplier(p.hp, stats.maxHp, stats.wrathHp > 0); // 狂血の契約:失ったHPによる追加分
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
-      let dmg = calculateAttackDamage({
+      const dmg = calculateAttackDamage({
         attack: stats.atk,
         killMomentum: p.killMomentum || 0,
         variance: rand(-1, 2),
@@ -1871,7 +1870,6 @@ export default function HackRoguelike() {
         crystallineMultiplier: e.gimmick === "crystalline" ? (usedSkill ? 1.5 : 0.8) : 1,
         targetFragile: e.gimmick === "fragile",
       });
-      dmg = Math.max(0, Math.round(dmg * directDamageMultiplier(e)));
       // 石殻(ガーゴイル):一定未満の弱い一撃を完全に弾く
       const stoneThresh = 6 + Math.round(floor * 1.2);
       if (e.gimmick === "stoneskin" && dmg < stoneThresh) {
@@ -2080,12 +2078,6 @@ export default function HackRoguelike() {
     if (critCdCut) addLog("⏳ 勢いに乗った！全スキルCD-1", "info");
     tickCds(usedSkill, critCdCut + resoRelease);
     if (e.hp <= 0) { e.directKill = true; setEnemy(e); afterKill(p, e); return; } // 直接攻撃によるトドメ(自爆の対象)
-    if (getCombatRhythm(e) && hitsDone > 0) {
-      const rhythm = advanceCombatRhythm(e, "direct-action");
-      e = rhythm.enemy;
-      if (rhythm.events.some(event => event.type === "exposed")) addLog("🎯 装甲破壊！弱点が露出した", "gold");
-      if (rhythm.events.some(event => event.type === "protected")) addLog("🛡️ 装甲を再構築した", "info");
-    }
     if (e.guardTurns > 0) e.guardTurns--; // 構えはプレイヤーの攻撃1ターン分で解除
     // 反撃(リザードマン):攻撃を受けたターン、30%で即座に反撃してくる
     if (e.gimmick === "counter" && hitsDone > 0 && Math.random() < 0.3) {
@@ -2606,7 +2598,7 @@ export default function HackRoguelike() {
         })),
         patchEnemy: (patch) => setEnemy(current => current ? {
           ...current,
-          ...selectPatch(patch, ["name", "counterplay", "combatRhythm", "protectedTurns", "exposedTurns", "hp", "maxHp", "atk", "trait", "gimmick", "guardTurns", "status", "intent", "pattern", "patternIdx", "isBoss"]),
+          ...selectPatch(patch, ["name", "counterplay", "hp", "maxHp", "atk", "trait", "gimmick", "guardTurns", "status", "intent", "pattern", "patternIdx", "isBoss"]),
         } : current),
         runEnemyTurn: () => {
           const nextEnemy = { ...enemy, status: enemy?.status ? { ...enemy.status } : undefined };
@@ -3466,17 +3458,6 @@ export default function HackRoguelike() {
             </div>
           )}
           {enemy.guardTurns > 0 && <div style={{ fontSize: 11, color: "#60a5fa", marginTop: 4 }}>🛡️ 構え中(受けるダメージ-50%)</div>}
-          {getCombatRhythm(enemy) && (
-            <div data-testid="combat-rhythm" style={{ marginTop: 6 }}>
-              <div style={{ display: "flex", justifyContent: "center", gap: 8, fontSize: 11, color: enemy.exposedTurns > 0 ? "#fbbf24" : "#60a5fa" }}>
-                <span>{enemy.exposedTurns > 0 ? "🎯 弱点露出" : `🛡️ 装甲 ${enemy.protectedTurns}/${getCombatRhythm(enemy).protectedTurns}`}</span>
-                <span>{enemy.exposedTurns > 0 ? `残り${enemy.exposedTurns}T・直接ダメージ100%` : `直接ダメージ${Math.round(getCombatRhythm(enemy).protectedMultiplier * 100)}%`}</span>
-              </div>
-              <div style={{ width: "100%", height: 5, background: "#1c1917", borderRadius: 4, overflow: "hidden", marginTop: 3 }}>
-                <div style={{ height: "100%", width: enemy.exposedTurns > 0 ? "100%" : `${(enemy.protectedTurns / getCombatRhythm(enemy).protectedTurns) * 100}%`, background: enemy.exposedTurns > 0 ? "#fbbf24" : "#3b82f6" }} />
-              </div>
-            </div>
-          )}
           {enemy.status && Object.entries(enemy.status).some(([, v]) => v.turns > 0) && (
             <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 6, flexWrap: "wrap" }}>
               {Object.entries(enemy.status).filter(([, v]) => v.turns > 0).map(([k, v]) => (
