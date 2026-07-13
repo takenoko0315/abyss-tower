@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateAttackDamage,
+  estimateDirectDamageRange,
   calculateBaseIncomingDamage,
   critOverflowBonus,
   decrementStatusTurn,
@@ -27,6 +28,16 @@ describe("TASK-014 contract calculations", () => {
     expect(potionHealingMultiplier({ potionCut20: 1 })).toBe(0.8);
     expect(potionHealingMultiplier({ potionHalf: 1 })).toBe(0.5);
     expect(potionHealingMultiplier({ potionHalf: 1, potionCut20: 1 })).toBe(0.5);
+  });
+});
+
+describe("direct damage preview", () => {
+  it("uses the real damage rounding at variance -1 through +2 without probabilistic criticals", () => {
+    expect(estimateDirectDamageRange({ attack: 20, multiplier: 0.25, hits: 2, critChance: 80, critDamage: 200 })).toEqual({ min: 10, max: 12 });
+  });
+
+  it("includes only guaranteed critical damage", () => {
+    expect(estimateDirectDamageRange({ attack: 20, multiplier: 2, guaranteedCritical: true, critDamage: 150 })).toEqual({ min: 57, max: 66 });
   });
 });
 

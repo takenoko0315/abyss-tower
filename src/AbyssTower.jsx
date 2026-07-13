@@ -10,6 +10,7 @@ import {
   calculateAttackDamage,
   calculateBaseIncomingDamage,
   doubleTierChances,
+  estimateDirectDamageRange,
   frenzyDamageMultiplier,
   mergeStatus,
   potionHealingMultiplier,
@@ -369,6 +370,8 @@ export default function HackRoguelike() {
   const [playerPopups, setPlayerPopups] = useState([]); // プレイヤーHP付近のダメージ/回復ポップ
   const [enemyHitFx, setEnemyHitFx] = useState(0); // 敵シェイク再生用の一意な値(変わるたびCSSアニメーションを再生させる)
   const [playerHitFx, setPlayerHitFx] = useState({ nonce: 0, heavy: false }); // 画面端フラッシュ再生用
+  const [combatNotice, setCombatNotice] = useState(null);
+  const combatNoticeTimer = useRef(null);
   const sandboxEnabled = import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("combatSandbox") === "1";
   const [sandboxMode, setSandboxMode] = useState(false);
   const [sandboxConfig, setSandboxConfig] = useState({ enemy: "鉄の処刑人", floor: 10, cls: "warrior", blessing: "", contract: "none", equipment: "standard10", hp: 100, seed: 7001, patternIdx: 2, intent: "heavy", rhythmPhase: "default", atkMult: 1, hpMult: 1, defMult: 1, potions: 3, skillCd: 0 });
@@ -391,6 +394,12 @@ export default function HackRoguelike() {
   useEffect(() => { setSfxVolume(sfxVolume / 100); }, [sfxVolume]);
   // アンマウント時、演出待ちの敵ターンが残っていればタイマーを掃除する
   useEffect(() => () => { if (pendingTurnRef.current) clearTimeout(pendingTurnRef.current.timer); }, []);
+  useEffect(() => () => { if (combatNoticeTimer.current) clearTimeout(combatNoticeTimer.current); }, []);
+  const showCombatNotice = (text, tone = "gold") => {
+    if (combatNoticeTimer.current) clearTimeout(combatNoticeTimer.current);
+    setCombatNotice({ text, tone, nonce: Date.now() });
+    combatNoticeTimer.current = setTimeout(() => setCombatNotice(null), 900);
+  };
   // BGMはブラウザの自動再生制限があるため、ユーザー操作の中でplay()する必要がある。
   // モバイルSafari等は最初の1回だけでは解除に失敗することがあるため、実際に再生が始まるまでclick/touchendのたびに再試行する
   useEffect(() => {
@@ -757,6 +766,47 @@ export default function HackRoguelike() {
     return { mult, notes, furyReady };
   };
 
+  const executionCountdown = e => {
+    if (!isHeavyCounterplayEnemy(e)) return null;
+    if (e.intent === "heavy") return 1;
+    if (!Array.isArray(e.pattern) || e.pattern.length === 0) return null;
+    const start = Number.isFinite(e.patternIdx) ? e.patternIdx : 0;
+    for (let offset = 0; offset < e.pattern.length; offset++) {
+      if (e.pattern[(start + offset) % e.pattern.length] === "heavy") return offset + 2;
+    }
+    return null;
+  };
+
+  const directDamagePreview = (spec, usedSkill, category = usedSkill ? "skill" : "attack", skillKey = null) => {
+    const info = currentAttackMultiplier(usedSkill);
+    const mod = skillKey ? (player.skillMods || {})[skillKey] : null;
+    let multiplier = spec.mult * info.mult * previewPlayerAction(enemy, category).multiplier;
+    if (spec.execute && enemy.hp / enemy.maxHp <= 0.3) multiplier = 3 * info.mult * previewPlayerAction(enemy, category).multiplier;
+    if (spec.punish && (enemy.intent === "guard" || enemy.intent === "heavy")) multiplier = 2.5 * info.mult;
+    if (mod === "ampMod") multiplier *= 1.3;                                   // モッド増幅
+    if (hasNode(player, "w3") && enemy.status?.stun?.turns > 0) multiplier *= 1.2; // 剛拳:気絶中の敵に+20%
+    if (hasNode(player, "a4") && !usedSkill && enemy.hp / enemy.maxHp <= 0.25) multiplier *= 3.0; // 暗殺:瀕死に致命の一撃
+    return estimateDirectDamageRange({
+      attack: stats.atk,
+      killMomentum: player.killMomentum || 0,
+      multiplier,
+      hits: (spec.hits || 1) + (mod === "chainMod" ? 1 : 0),
+      guaranteedCritical: !!spec.forceCrit || mod === "critMod",
+      critDamage: stats.critDmg,
+      critChance: stats.crit,
+      targetTough: enemy.trait === "tough",
+      targetGuarding: enemy.guardTurns > 0,
+      crystallineMultiplier: enemy.gimmick === "crystalline" ? (usedSkill ? 1.5 : 0.8) : 1,
+      targetFragile: enemy.gimmick === "fragile",
+    });
+  };
+
+  const damagePreviewCaption = category => {
+    const multiplier = previewPlayerAction(enemy, category).multiplier;
+    if (rhythmFor(enemy)?.key === "executioner") return multiplier < 1 ? "装甲で75%軽減" : multiplier > 1 ? "弱点×2.0" : "";
+    return multiplier !== 1 ? `状態倍率×${multiplier.toFixed(1)}` : "";
+  };
+
   // 棘の実効値(表示にも使う共通計算。鉄壁の棘=防御力加算・逆鱗=攻撃力加算を反映)
   const thornsEffective = (s) => (s.thorns + (s.thornsScale > 0 ? Math.round(s.atk * 0.2) : 0) + (s.thornsDef > 0 ? Math.round(s.def * 0.35) : 0)) * (s.thornsX3 > 0 ? 3 : 1);
 
@@ -1021,7 +1071,7 @@ export default function HackRoguelike() {
     }
     const rhythmEnemyResult = resolveEnemyRhythmAction(e, { intent: act, defended: defendedHeavyDamage });
     Object.assign(e, rhythmEnemyResult.enemy);
-    if (rhythmEnemyResult.events.some(event => event.type === "armor-broken")) addLog("🪓 処刑を受け流した！装甲崩壊", "gold");
+    if (rhythmEnemyResult.events.some(event => event.type === "armor-broken")) { addLog("🪓 処刑を受け流した！装甲崩壊", "gold"); showCombatNotice("装甲崩壊", "gold"); SFX.crit(); }
     if (rhythmEnemyResult.events.some(event => event.type === "overheated")) addLog("🔥 ブレス後の過熱！弱点が露出", "gold");
     if (defendedHeavyDamage && p.hp > 0 && e.hp > 0 && (stats.noDefend || 0) <= 0 && rhythmFor(e)?.key !== "executioner") {
       p = grantRiposte(p);
@@ -2169,7 +2219,11 @@ export default function HackRoguelike() {
         addLog(`🔥 魔力で${e.name}が燃え上がる！`, "dmg");
       }
     }
-    if (e.hp > 0) e = resolvePlayerRhythmAction(e, rhythmCategory).enemy;
+    if (e.hp > 0) {
+      const rhythmResult = resolvePlayerRhythmAction(e, rhythmCategory);
+      e = rhythmResult.enemy;
+      if (rhythmResult.events.some(event => event.type === "armor-restored")) showCombatNotice("装甲再展開", "blue");
+    }
     const counterplay = e.hp > 0 ? resolveHeavyCounterplay({
       enemyBefore: counterplayEnemyBefore,
       enemyAfter: e,
@@ -2181,6 +2235,7 @@ export default function HackRoguelike() {
       if (counterplay.method === "damage") addLog("💥 大技を火力で中断！", "gold");
       else addLog(`❄️ 大技を${counterplay.ccType === "stun" ? "気絶" : "凍結"}で中断！`, "gold");
       SFX.crit();
+      showCombatNotice(counterplay.method === "damage" ? "火力中断！" : `${counterplay.ccType === "stun" ? "気絶" : "凍結"}中断！`, counterplay.method === "damage" ? "gold" : "ice");
     }
     SFX[critLanded ? "crit" : usedSkill ? "skill" : "attack"]();
     const critCdCut = critLanded && stats.onCritCd > 0 && Math.random() < 0.4 ? 1 : 0;
@@ -2269,13 +2324,19 @@ export default function HackRoguelike() {
       addLog(`${s.icon}${s.name}！障壁+${shield}(現在${p.barrier})`, "heal");
     }
     const rhythmCategory = spec.status ? "status" : ["heal", "shield"].includes(spec.kind) ? "heal" : ["guard", "parry"].includes(spec.kind) ? "defend" : "skill";
-    if (e.hp > 0) e = resolvePlayerRhythmAction(e, rhythmCategory).enemy;
+    if (e.hp > 0) {
+      const rhythmResult = resolvePlayerRhythmAction(e, rhythmCategory);
+      e = rhythmResult.enemy;
+      if (rhythmResult.events.some(event => event.type === "armor-restored")) showCombatNotice("装甲再展開", "blue");
+      if (rhythmResult.events.some(event => event.type === "parry-ready")) { showCombatNotice("受け流し準備！", "blue"); SFX.defend(); }
+    }
     const counterplay = e.hp > 0 ? resolveHeavyCounterplay({ enemyBefore: counterplayEnemyBefore, enemyAfter: e, directDamage }) : { interrupted: false };
     if (counterplay.interrupted) {
       e.heavyCounterplayInterrupt = counterplay.method;
       e = resolveEnemyRhythmAction(e, { intent: "heavy", defended: false, ccInterrupted: true }).enemy;
       addLog("💥 大技を火力で中断！", "gold");
       SFX.crit();
+      showCombatNotice("火力中断！", "gold");
     }
     tickCds(key);
     if (e.hp <= 0) { setEnemy(e); afterKill(p, e); return; }
@@ -2330,7 +2391,9 @@ export default function HackRoguelike() {
     SFX.defend();
     addLog(`🛡️ 防御の構えを取った(このターン被ダメ${stats.betterDefend > 0 ? "-80%" : "-60%"}・次のターン与ダメ+15%)`, "info");
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
-    e = resolvePlayerRhythmAction(e, "defend").enemy;
+    const rhythmResult = resolvePlayerRhythmAction(e, "defend");
+    e = rhythmResult.enemy;
+    if (rhythmResult.events.some(event => event.type === "parry-ready")) { showCombatNotice("受け流し準備！", "blue"); SFX.defend(); }
     if (isHeavyCounterplayEnemy(e)) delete e.counterplayOutcome;
     // 防御時凍結(氷の心臓・霜纏い)
     const freezeCh = (stats.onDefendFreezeCh || 0) + (player.cls === "mage" && player.variant === "b" ? 35 : 0);
@@ -3474,7 +3537,11 @@ export default function HackRoguelike() {
         @keyframes abyss-shake-b { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
         @keyframes abyss-flash-fade-a { 0% { opacity: 1; } 100% { opacity: 0; } }
         @keyframes abyss-flash-fade-b { 0% { opacity: 1; } 100% { opacity: 0; } }
+        @keyframes abyss-notice { 0% { transform: translate(-50%,-8px) scale(.85); opacity: 0; } 20%,75% { transform: translate(-50%,0) scale(1); opacity: 1; } 100% { transform: translate(-50%,-10px) scale(1.05); opacity: 0; } }
+        @keyframes abyss-danger-pulse { 0%,100% { box-shadow: inset 0 0 18px rgba(220,38,38,.25); } 50% { box-shadow: inset 0 0 34px rgba(239,68,68,.7); } }
+        @keyframes abyss-ready-glow { 0%,100% { box-shadow: 0 0 8px rgba(96,165,250,.3); } 50% { box-shadow: 0 0 18px rgba(96,165,250,.75); } }
       `}</style>
+      {combatNotice && <div key={combatNotice.nonce} data-testid="combat-notice" style={{ position: "fixed", zIndex: 30, left: "50%", top: "38%", transform: "translateX(-50%)", pointerEvents: "none", whiteSpace: "nowrap", borderRadius: 10, padding: "10px 18px", fontSize: 22, fontWeight: 900, color: combatNotice.tone === "ice" ? "#bae6fd" : combatNotice.tone === "blue" ? "#dbeafe" : "#fde68a", background: "rgba(12,10,9,.92)", border: `2px solid ${combatNotice.tone === "ice" ? "#38bdf8" : combatNotice.tone === "blue" ? "#60a5fa" : "#fbbf24"}`, textShadow: "0 2px 4px #000", animation: "abyss-notice .9s ease-out forwards" }}>{combatNotice.text}</div>}
       {playerHitFx.nonce > 0 && (
         <div style={{
           position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999,
@@ -3525,7 +3592,7 @@ export default function HackRoguelike() {
 
       {/* 敵 */}
       {enemy && (
-        <div style={{ position: "relative", background: enemy.isFinal ? "#2a0a0a" : enemy.isBoss ? "#1c1007" : "#161210", border: `1px solid ${enemy.isFinal ? "#dc2626" : enemy.isBoss ? "#b45309" : "#292524"}`, boxShadow: enemy.isFinal ? "0 0 22px rgba(220,38,38,0.4)" : "none", borderRadius: 10, padding: 14, marginBottom: 12, textAlign: "center", animation: enemyHitFx > 0 ? `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out` : "none" }}>
+        <div data-testid="enemy-card" style={{ position: "relative", background: enemy.rhythmState?.phase === "exposed" ? "#2b2105" : enemy.isFinal ? "#2a0a0a" : enemy.isBoss ? "#1c1007" : "#161210", border: `2px solid ${enemy.rhythmState?.phase === "exposed" ? "#fbbf24" : enemy.isFinal ? "#dc2626" : enemy.isBoss ? "#b45309" : "#292524"}`, boxShadow: enemy.rhythmState?.phase === "exposed" ? "0 0 24px rgba(251,191,36,.65)" : enemy.isFinal ? "0 0 22px rgba(220,38,38,0.4)" : "none", borderRadius: 10, padding: 14, marginBottom: 12, textAlign: "center", animation: isHeavyCounterplay(enemy) ? "abyss-danger-pulse .7s ease-in-out infinite" : enemyHitFx > 0 ? `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out` : "none" }}>
           {enemyPopups.length > 0 && (
             <div style={{ position: "absolute", left: "50%", top: 6, width: 0, height: 0, pointerEvents: "none" }}>
               {enemyPopups.map(pop => (
@@ -3559,10 +3626,16 @@ export default function HackRoguelike() {
           {enemy.gimmick === "slow" && enemy.resting && (
             <div style={{ fontSize: 11, color: "#60a5fa", marginBottom: 4 }}>🤖 次のターンは充填で動けない</div>
           )}
-          <Bar cur={enemy.hp} max={enemy.maxHp} color="#dc2626" />
+          <Bar cur={enemy.hp} max={enemy.maxHp} color={enemy.rhythmState?.phase === "exposed" ? "#fbbf24" : "#dc2626"} />
           <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>{Math.max(0, enemy.hp)} / {enemy.maxHp}　攻撃 {Math.round(enemy.atk * enemyAtkMult(enemy))}{enemyAtkMult(enemy) > 1 ? "↑" : ""}</div>
+          {isHeavyCounterplayEnemy(enemy) && executionCountdown(enemy) !== null && (
+            <div data-testid="execution-countdown" style={{ margin: "9px auto 0", width: "min(100%,320px)", padding: isHeavyCounterplay(enemy) ? "10px 12px" : "6px 10px", borderRadius: 8, border: `2px solid ${isHeavyCounterplay(enemy) ? "#ef4444" : "#7f1d1d"}`, background: isHeavyCounterplay(enemy) ? "#450a0a" : "#1c0b0b", color: isHeavyCounterplay(enemy) ? "#fecaca" : "#fca5a5", fontWeight: 900 }}>
+              <div style={{ fontSize: isHeavyCounterplay(enemy) ? 34 : 22, lineHeight: 1 }}>🪓</div>
+              <div style={{ fontSize: isHeavyCounterplay(enemy) ? 18 : 13 }}>処刑まで {executionCountdown(enemy)}行動</div>
+            </div>
+          )}
           {/* 行動予告(インテント) */}
-          {enemy.intent && (() => {
+          {enemy.intent && !(isHeavyCounterplayEnemy(enemy) && enemy.intent === "heavy") && (() => {
             const it = INTENTS[enemy.intent];
             const hitsEst = enemy.intent === "flurry" ? 3 : enemy.trait === "swift" && enemy.intent === "attack" ? 2 : 1;
             const gimmickMult = (enemy.gimmick === "fragile" ? 1.5 : 1) * (enemy.gimmick === "burrow" && enemy.burrowedNext ? 1.6 : 1);
@@ -3582,21 +3655,24 @@ export default function HackRoguelike() {
               </div>
             );
           })()}
-          {isHeavyCounterplay(enemy) && (
-            <div data-testid="heavy-counterplay-hint" style={{ marginTop: 6, fontSize: 11, color: "#fde68a", lineHeight: 1.5 }}>
-              🛡️ 大技を防御すると次の攻撃行動全体+30%　💥 1行動の直接ダメージ合計が敵最大HPの20%以上　❄️ 新規・延長の気絶/凍結で中断
-            </div>
-          )}
           {rhythmFor(enemy) && (() => {
             const rhythm = rhythmFor(enemy);
             const state = enemy.rhythmState || {};
             const exposed = state.phase === "exposed" || state.phase === "overheated";
-            const label = rhythm.key === "executioner" ? (state.phase === "exposed" ? "🎯 装甲崩壊" : state.parryReady ? "🛡️ 受け流し準備" : "🪓 装甲防御") : rhythm.key === "dragon" ? (state.phase === "flying" ? "🐉 飛翔" : state.phase === "breath" ? "🔥 次:ブレス" : "♨️ 過熱") : state.phase === "exposed" ? "💥 障壁崩壊" : "💎 共鳴障壁";
-            const remaining = rhythm.key === "dragon" ? `${state.actionsLeft ?? 0}行動` : rhythm.key === "crystal" ? `${state.categories?.length || 0}/3カテゴリ` : state.parryReady ? "処刑防御で崩壊" : "防御で準備";
-            const valid = rhythm.key === "crystal" ? ["attack", "skill", "defend", "status", "heal"].filter(category => category !== state.lastCategory).join(" / ") : rhythm.key === "dragon" && state.phase === "flying" ? "防御 / 回復 / バフ / 状態異常" : rhythm.key === "executioner" && state.phase !== "exposed" ? "防御 → 処刑防御 / CC" : "高火力";
+            const label = rhythm.key === "executioner" ? (state.phase === "exposed" ? "💥 装甲崩壊" : "🛡️ 装甲防御") : rhythm.key === "dragon" ? (state.phase === "flying" ? "🐉 飛翔" : state.phase === "breath" ? "🔥 次:ブレス" : "♨️ 過熱") : state.phase === "exposed" ? "💥 障壁崩壊" : "💎 共鳴障壁";
+            const remaining = rhythm.key === "dragon" ? `${state.actionsLeft ?? 0}行動` : rhythm.key === "crystal" ? `${state.categories?.length || 0}/3カテゴリ` : state.phase === "exposed" ? "弱点: 次の1行動まで" : `処刑まで ${executionCountdown(enemy) ?? "?"}行動`;
+            if (rhythm.key !== "executioner") {
+              const valid = rhythm.key === "crystal" ? ["attack", "skill", "defend", "status", "heal"].filter(category => category !== state.lastCategory).join(" / ") : state.phase === "flying" ? "防御 / 回復 / バフ / 状態異常" : "高火力";
+              return <div data-testid="combat-rhythm" style={{ marginTop: 6, padding: 7, borderRadius: 7, border: `1px solid ${exposed ? "#fbbf24" : "#60a5fa"}`, background: exposed ? "#422006" : "#0c1b33", boxShadow: exposed ? "0 0 14px rgba(251,191,36,.35)" : "none" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800 }}><span>{label}</span><span>{remaining}</span><span>直接×{previewPlayerAction(enemy, "attack").multiplier.toFixed(2)}</span></div>
+                <div style={{ fontSize: 10, color: "#a8a29e", marginTop: 3 }}>有効: {valid}</div>
+              </div>;
+            }
+            const damagePercent = Math.round(previewPlayerAction(enemy, "attack").multiplier * 100);
             return <div data-testid="combat-rhythm" style={{ marginTop: 6, padding: 7, borderRadius: 7, border: `1px solid ${exposed ? "#fbbf24" : "#60a5fa"}`, background: exposed ? "#422006" : "#0c1b33", boxShadow: exposed ? "0 0 14px rgba(251,191,36,.35)" : "none" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800 }}><span>{label}</span><span>{remaining}</span><span>直接×{previewPlayerAction(enemy, "attack").multiplier.toFixed(2)}</span></div>
-              <div style={{ fontSize: 10, color: "#a8a29e", marginTop: 3 }}>有効: {valid}</div>
+              <div style={{ fontSize: 11, fontWeight: 800 }}>{label}</div>
+              <div data-testid="damage-efficiency" style={{ color: exposed ? "#fde047" : "#e7e5e4", fontSize: 21, fontWeight: 900, marginTop: 2 }}>敵が受ける{state.phase === "exposed" ? "" : "直接"}ダメージ {damagePercent}%</div>
+              <div style={{ fontSize: 11, color: exposed ? "#fde68a" : "#a8a29e", marginTop: 3 }}>{remaining}</div>
             </div>;
           })()}
           {enemy.guardTurns > 0 && <div style={{ fontSize: 11, color: "#60a5fa", marginTop: 4 }}>🛡️ 構え中(受けるダメージ-50%)</div>}
@@ -3613,6 +3689,7 @@ export default function HackRoguelike() {
       )}
 
       {/* プレイヤー */}
+      <div data-testid="player-card" style={{ border: `1px solid ${enemy?.rhythmState?.parryReady ? "#60a5fa" : "transparent"}`, background: enemy?.rhythmState?.parryReady ? "#0b1b32" : "transparent", borderRadius: 9, padding: enemy?.rhythmState?.parryReady ? 8 : 0, marginBottom: 8, animation: enemy?.rhythmState?.parryReady ? "abyss-ready-glow 1.1s ease-in-out infinite" : "none" }}>
       <div style={{ marginBottom: 4, display: "flex", justifyContent: "space-between", fontSize: 12, color: "#a8a29e" }}>
         <span>あなた
           {player.cls === "warrior" && (player.fury || 0) > 0 ? <span style={{ color: "#f87171" }}>　🔥闘志{player.fury}/{player.variant === "b" ? 7 : 5}</span> : null}
@@ -3621,6 +3698,7 @@ export default function HackRoguelike() {
           {player.cls === "mage" && (player.resonance || 0) > 0 ? <span style={{ color: "#60a5fa" }}>　✨共鳴{player.resonance}/{player.variant === "c" ? 4 : 3}</span> : null}
           {player.pPoison?.turns > 0 ? <span style={{ color: "#c084fc" }}>　🟣毒{player.pPoison.turns}T({player.pPoison.dmg}/T)</span> : null}{(player.healReduce || 0) > 0 ? <span style={{ color: "#78716c" }}>　☠️回復-{player.healReduce}%</span> : null}{player.petrified ? <span style={{ color: "#a8a29e" }}>　🗿石化(攻撃のみ可)</span> : null}{player.defending ? <span style={{ color: "#60a5fa" }}>　🛡️防御中</span> : null}</span><span>{Math.max(0, player.hp)} / {stats.maxHp}</span>
       </div>
+      {enemy?.rhythmState?.parryReady && <div data-testid="parry-ready" style={{ color: "#bfdbfe", fontSize: 13, fontWeight: 900, margin: "2px 0 6px" }}>🛡️ 受け流し準備</div>}
       <div style={{ position: "relative" }}>
         {playerPopups.length > 0 && (
           <div style={{ position: "absolute", left: "50%", top: -4, width: 0, height: 0, pointerEvents: "none" }}>
@@ -3651,10 +3729,11 @@ export default function HackRoguelike() {
           </div>
         );
       })()}
+      </div>
 
       {/* 操作 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={{ ...btnStyle(false), opacity: previewPlayerAction(enemy, "attack").effective ? 1 : .45 }}>⚔️ 攻撃</button>
+        {(() => { const range = directDamagePreview({ mult: 1, hits: 1 }, false, "attack"); return <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={{ ...btnStyle(false), opacity: previewPlayerAction(enemy, "attack").effective ? 1 : .45, minHeight: 58 }}><div>⚔️ 攻撃</div><div data-testid="attack-damage-preview" style={{ fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>{damagePreviewCaption("attack") && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, "attack").multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption("attack")}</div>}</button>; })()}
         <button onClick={useDefend} disabled={stats.noDefend > 0 || player.petrified} style={{ ...btnStyle(stats.noDefend > 0 || player.petrified, "#1e40af"), opacity: previewPlayerAction(enemy, "defend").effective ? 1 : .45 }}>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</button>
         <button data-testid="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={{ ...btnStyle(player.potions <= 0 || player.petrified, "#166534"), opacity: previewPlayerAction(enemy, "heal").effective ? 1 : .45 }}>
           🧪 ×{player.potions}
@@ -3667,9 +3746,12 @@ export default function HackRoguelike() {
             const cd = cds[k] || 0;
             const dis = cd > 0 || player.petrified;
             const category = s.status ? "status" : ["heal", "shield"].includes(s.kind) ? "heal" : ["guard", "parry"].includes(s.kind) ? "defend" : "skill";
+            const range = !s.spec.kind ? directDamagePreview(s.spec, true, category, k) : null;
             return (
-              <button key={k} onClick={() => castSkill(k)} disabled={dis} style={{ ...btnStyle(dis, "#7c2d12"), fontSize: 13, opacity: previewPlayerAction(enemy, category).effective ? 1 : .45 }}>
-                {s.icon} {s.name}{(player.skillMods || {})[k] ? SKILL_MODS[(player.skillMods || {})[k]].icon : ""}{cd > 0 ? ` (${cd})` : ""}
+              <button data-testid={`skill-button-${k}`} key={k} onClick={() => castSkill(k)} disabled={dis} style={{ ...btnStyle(dis, "#7c2d12"), fontSize: 13, opacity: previewPlayerAction(enemy, category).effective ? 1 : .45, minHeight: 58 }}>
+                <div>{s.icon} {s.name}{(player.skillMods || {})[k] ? SKILL_MODS[(player.skillMods || {})[k]].icon : ""}{cd > 0 ? ` (${cd})` : ""}</div>
+                {range && <div style={{ fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>}
+                {range && damagePreviewCaption(category) && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, category).multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption(category)}</div>}
               </button>
             );
           })}

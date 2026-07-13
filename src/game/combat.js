@@ -59,6 +59,28 @@ export function calculateAttackDamage({
   return damage;
 }
 
+export function estimateDirectDamageRange({
+  attack,
+  killMomentum = 0,
+  multiplier = 1,
+  hits = 1,
+  guaranteedCritical = false,
+  critDamage = 100,
+  critChance = 0,
+  targetTough = false,
+  targetGuarding = false,
+  crystallineMultiplier = 1,
+  targetFragile = false,
+}) {
+  const safeHits = Number.isFinite(hits) ? Math.max(1, Math.trunc(hits)) : 1;
+  const damageAt = variance => calculateAttackDamage({
+    attack, killMomentum, variance, multiplier,
+    isCritical: guaranteedCritical, critDamage, critChance,
+    targetTough, targetGuarding, crystallineMultiplier, targetFragile,
+  }) * safeHits;
+  return { min: damageAt(-1), max: damageAt(2) };
+}
+
 export function calculateBaseIncomingDamage(rawDamage, defense, variance = 0) {
   return Math.max(1, Math.round(rawDamage - defense + variance));
 }

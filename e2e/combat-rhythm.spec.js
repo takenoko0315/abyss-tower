@@ -9,9 +9,19 @@ test.beforeEach(async ({ page }) => {
 test("処刑人は防御準備後の処刑防御でのみ装甲崩壊する", async ({ page }) => {
   await page.evaluate(() => window.__abyssE2E.startSandboxCombat({ enemy: "鉄の処刑人", intent: "heavy", rhythmPhase: "default", hp: 100, seed: 7001 }));
   await expect(page.getByTestId("combat-rhythm")).toContainText("装甲防御");
+  await expect(page.getByTestId("damage-efficiency")).toContainText("敵が受ける直接ダメージ 25%");
+  await expect(page.getByTestId("attack-damage-preview")).toContainText("予想");
   await page.getByRole("button", { name: /防御/ }).click();
   await expect.poll(() => page.evaluate(() => window.__abyssDebug.enemy.rhythmState.phase)).toBe("exposed");
-  await expect(page.getByTestId("combat-rhythm")).toContainText("直接×2.00");
+  await expect(page.getByTestId("combat-rhythm")).toContainText("敵が受けるダメージ 200%");
+  await expect(page.getByTestId("enemy-card")).toHaveCSS("border-top-color", "rgb(251, 191, 36)");
+});
+
+test("処刑人の受け流し準備はプレイヤー側へ表示される", async ({ page }) => {
+  await page.evaluate(() => window.__abyssE2E.startSandboxCombat({ enemy: "鉄の処刑人", intent: "attack", rhythmPhase: "default", seed: 7001 }));
+  await page.getByRole("button", { name: /防御/ }).click();
+  await expect(page.getByTestId("parry-ready")).toBeVisible();
+  await expect(page.getByTestId("player-card")).toHaveCSS("border-top-color", "rgb(96, 165, 250)");
 });
 
 test("古竜は飛翔と過熱をサンドボックスから即時確認できる", async ({ page }) => {
