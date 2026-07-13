@@ -29,6 +29,12 @@ import {
 } from "./game/heavyCounterplay.js";
 import { initializeRhythm, previewPlayerAction, resolveEnemyRhythmAction, resolvePlayerRhythmAction, rhythmFor } from "./game/combatRhythm.js";
 import { applySandboxFinalMultipliers, createSandboxEquipment, normalizeSandboxCount, normalizeSandboxMultiplier, SANDBOX_MULTIPLIERS, SANDBOX_PRESETS, sandboxSkillsFor } from "./game/combatSandbox.js";
+import Bar from "./components/Bar.jsx";
+import EnemyCombatCard from "./components/EnemyCombatCard.jsx";
+import EnemyIntentPanel from "./components/EnemyIntentPanel.jsx";
+import CombatStatusChip from "./components/CombatStatusChip.jsx";
+import CombatActionButton from "./components/CombatActionButton.jsx";
+import { COMBAT_TONES } from "./components/combatTheme.js";
 
 let ACTIVE_DIFF = DIFFICULTIES.normal;
 
@@ -271,14 +277,6 @@ function totalStats(player, equip) {
 }
 
 // ===== コンポーネント =====
-function Bar({ cur, max, color, height = 14 }) {
-  return (
-    <div style={{ background: "#1c1917", borderRadius: 4, height, overflow: "hidden", border: "1px solid #292524" }}>
-      <div style={{ width: `${Math.max(0, (cur / max) * 100)}%`, height: "100%", background: color, transition: "width 0.3s" }} />
-    </div>
-  );
-}
-
 function ItemCard({ item, label }) {
   if (item.identified === false) {
     return (
@@ -825,10 +823,6 @@ export default function HackRoguelike() {
     }
     return !!range && range.min >= enemy.maxHp * HEAVY_COUNTERPLAY.damageThreshold;
   };
-  const interruptButtonStyle = { border: "2px solid #ef4444", animation: "abyss-interrupt-pop .3s ease-out, abyss-interrupt-glow 1.1s ease-in-out .3s infinite" };
-  const interruptBadgeStyle = { position: "absolute", top: -8, right: -6, fontSize: 15, filter: "drop-shadow(0 0 3px #000)" };
-  // 鉄の処刑人戦だけ「中断不可で暗くする」演出を外し、通常の明るさで表示する(中断可否は上のinterruptButtonStyleで正方向に示す)
-  const buttonOpacity = category => isHeavyCounterplayEnemy(enemy) ? 1 : (previewPlayerAction(enemy, category).effective ? 1 : .45);
 
   const damagePreviewCaption = category => {
     const multiplier = previewPlayerAction(enemy, category).multiplier;
@@ -3555,8 +3549,6 @@ export default function HackRoguelike() {
 
   // ===== 戦闘 =====
   const xpNeed = Math.round((15 + player.level * 9) * (player.discountNextLevel ? 0.5 : 1));
-  // 鉄の処刑人戦だけ、行動ボタンを「技名は小さく・予想数値を大きく」のレイアウトへ寄せる(他の敵は既存レイアウトのまま)
-  const isExecutionerFight = isHeavyCounterplayEnemy(enemy);
   return (
     <div style={wrap}>
       {/* 戦闘演出用CSS(TASK-009): ダメージポップ・ヒットシェイク・被弾フラッシュ */}
@@ -3572,7 +3564,20 @@ export default function HackRoguelike() {
         @keyframes abyss-danger-pulse { 0%,100% { box-shadow: inset 0 0 18px rgba(220,38,38,.25); } 50% { box-shadow: inset 0 0 34px rgba(239,68,68,.7); } }
         @keyframes abyss-ready-glow { 0%,100% { box-shadow: 0 0 8px rgba(96,165,250,.3); } 50% { box-shadow: 0 0 18px rgba(96,165,250,.75); } }
         @keyframes abyss-interrupt-pop { 0% { transform: scale(.7); } 60% { transform: scale(1.1); } 100% { transform: scale(1); } }
-        @keyframes abyss-interrupt-glow { 0%,100% { box-shadow: 0 0 5px 1px rgba(239,68,68,.45); } 50% { box-shadow: 0 0 12px 2px rgba(239,68,68,.8); } }
+        @keyframes abyss-interrupt-glow { 0%,100% { box-shadow: 0 0 5px 1px rgba(251,191,36,.45); } 50% { box-shadow: 0 0 12px 2px rgba(251,191,36,.85); } }
+        @media (prefers-reduced-motion: reduce) {
+          .abyss-animated { animation: none !important; }
+        }
+        .abyss-ec-grid { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+        .abyss-ec-visual { width: 72px; height: 72px; font-size: 40px; }
+        .abyss-ec-info { width: 100%; text-align: center; }
+        @media (min-width: 640px) {
+          .abyss-ec-grid { display: grid; grid-template-columns: minmax(112px, 152px) 1fr; align-items: start; gap: 18px; text-align: left; }
+          .abyss-ec-visual { width: 112px; height: 112px; font-size: 52px; margin: 0 auto; }
+          .abyss-ec-info { text-align: left; }
+          /* 2列時、右上絶対配置の処刑カウント吹き出しと情報領域(HP行)が重ならないよう上に逃がす */
+          .abyss-ec-info.has-countdown { padding-top: 38px; }
+        }
       `}</style>
       {combatNotice && <div key={combatNotice.nonce} data-testid="combat-notice" style={{ position: "fixed", zIndex: 30, left: "50%", top: "38%", transform: "translateX(-50%)", pointerEvents: "none", whiteSpace: "nowrap", borderRadius: 10, padding: "10px 18px", fontSize: 22, fontWeight: 900, color: combatNotice.tone === "ice" ? "#bae6fd" : combatNotice.tone === "blue" ? "#dbeafe" : "#fde68a", background: "rgba(12,10,9,.92)", border: `2px solid ${combatNotice.tone === "ice" ? "#38bdf8" : combatNotice.tone === "blue" ? "#60a5fa" : "#fbbf24"}`, textShadow: "0 2px 4px #000", animation: "abyss-notice .9s ease-out forwards" }}>{combatNotice.text}</div>}
       {playerHitFx.nonce > 0 && (
@@ -3624,127 +3629,96 @@ export default function HackRoguelike() {
       ) : null}
 
       {/* 敵 */}
-      {enemy && (
-        <div data-testid="enemy-card" style={{ position: "relative", background: enemy.rhythmState?.phase === "exposed" ? "#2b2105" : isHeavyCounterplay(enemy) ? "#26080a" : enemy.isFinal ? "#2a0a0a" : enemy.isBoss ? "#1c1007" : "#161210", border: `2px solid ${enemy.rhythmState?.phase === "exposed" ? "#fbbf24" : isHeavyCounterplay(enemy) ? "#dc2626" : enemy.isFinal ? "#dc2626" : enemy.isBoss ? "#b45309" : "#292524"}`, boxShadow: enemy.rhythmState?.phase === "exposed" ? "0 0 24px rgba(251,191,36,.65)" : isHeavyCounterplay(enemy) ? "0 0 18px rgba(220,38,38,.4)" : enemy.isFinal ? "0 0 22px rgba(220,38,38,0.4)" : "none", borderRadius: 10, padding: 14, marginBottom: 12, textAlign: "center", animation: isHeavyCounterplay(enemy) ? "abyss-danger-pulse .7s ease-in-out infinite" : enemyHitFx > 0 ? `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out` : "none" }}>
-          {enemyPopups.length > 0 && (
-            <div style={{ position: "absolute", left: "50%", top: 6, width: 0, height: 0, pointerEvents: "none" }}>
-              {enemyPopups.map(pop => (
-                <div key={pop.id} style={{
-                  position: "absolute", left: pop.offset * 20 - (enemyPopups.length - 1) * 10, top: 0, transform: "translateX(-50%)", whiteSpace: "nowrap",
-                  color: pop.status ? STATUS[pop.status].color : pop.crit ? "#facc15" : "#f87171", fontWeight: 800, fontSize: pop.crit ? 22 : 15,
-                  textShadow: "0 1px 3px rgba(0,0,0,0.85)", animation: "abyss-float-up 0.9s ease-out forwards",
-                }}>{pop.status ? `${STATUS[pop.status].icon}${pop.text}` : pop.crit ? `💥${pop.text}` : pop.text}</div>
-              ))}
-            </div>
-          )}
-          {enemy.isFinal && <div style={{ color: "#f87171", fontSize: 12, fontWeight: 700, marginBottom: 2 }}>― 最 終 ボ ス ―</div>}
-          {enemy.arenaStage && <div style={{ color: "#fb923c", fontSize: 12, fontWeight: 700, marginBottom: 2 }}>🏟️ 闘技場 — {enemy.arenaStage}/2戦目</div>}
-          <div style={{ fontSize: 40 }}>{enemy.icon}</div>
-          <div style={{ fontWeight: 700, color: enemy.isBoss ? "#fbbf24" : "#e7e5e4", marginBottom: 6 }}>
-            {enemy.isBoss && "👑 "}{enemy.name}
-          </div>
-          {enemy.trait && (
-            <div style={{ fontSize: 11, color: "#c4b5fd", border: "1px solid #7c3aed", borderRadius: 4, padding: "2px 8px", display: "inline-block", marginBottom: 6 }}>
-              {ELITE_TRAITS[enemy.trait].icon} {ELITE_TRAITS[enemy.trait].name}:{ELITE_TRAITS[enemy.trait].desc}
-            </div>
-          )}
-          {enemy.gimmick && GIMMICKS[enemy.gimmick] && (
-            <div style={{ fontSize: 11, color: "#fdba74", border: "1px solid #ea580c", borderRadius: 4, padding: "2px 8px", display: "inline-block", marginBottom: 6, marginLeft: enemy.trait ? 4 : 0 }}>
-              {GIMMICKS[enemy.gimmick].icon} {GIMMICKS[enemy.gimmick].name}:{GIMMICKS[enemy.gimmick].desc}
-            </div>
-          )}
-          {enemy.cursedByShaman && (
-            <div style={{ fontSize: 11, color: "#f87171", marginBottom: 4 }}>🪶 呪詛纏い(攻撃+20%)</div>
-          )}
-          {enemy.gimmick === "slow" && enemy.resting && (
-            <div style={{ fontSize: 11, color: "#60a5fa", marginBottom: 4 }}>🤖 次のターンは充填で動けない</div>
-          )}
-          <Bar cur={enemy.hp} max={enemy.maxHp} color={enemy.rhythmState?.phase === "exposed" ? "#fbbf24" : "#dc2626"} />
-          <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>{Math.max(0, enemy.hp)} / {enemy.maxHp}　攻撃 {Math.round(enemy.atk * enemyAtkMult(enemy))}{enemyAtkMult(enemy) > 1 ? "↑" : ""}</div>
-          {isHeavyCounterplayEnemy(enemy) && executionCountdown(enemy) !== null && (() => {
-            const n = executionCountdown(enemy);
-            const imminent = n === 1;
-            return (
-              <div data-testid="execution-countdown" style={{
-                position: "absolute", top: 10, right: 10, zIndex: 2,
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 2,
-                minWidth: imminent ? 42 : 30, minHeight: imminent ? 42 : 30, padding: "0 7px",
-                borderRadius: "14px 14px 3px 14px", boxSizing: "border-box",
-                border: `2px solid ${imminent ? "#fecaca" : "#57534e"}`,
-                background: imminent ? "#ef4444" : "#292524", color: imminent ? "#fff" : "#d6d3d1",
-                fontWeight: 900, fontSize: imminent ? 19 : 13,
-                boxShadow: imminent ? "0 0 12px rgba(239,68,68,.8)" : "none",
-                animation: imminent ? "abyss-interrupt-pop .3s ease-out" : "none",
-              }}>
-                <span style={{ fontSize: imminent ? 16 : 12 }}>🪓</span>{n}
-              </div>
-            );
-          })()}
-          {/* 行動予告(インテント)。鉄の処刑人の処刑予告中(intent===heavy)だけ専用表示に切り替える */}
-          {enemy.intent && (() => {
-            if (isHeavyCounterplayEnemy(enemy) && enemy.intent === "heavy") {
-              const est = estimateIntentDamage(enemy);
-              const threshold = Math.ceil(enemy.maxHp * HEAVY_COUNTERPLAY.damageThreshold);
-              return (
-                <div data-testid="execution-intent" style={{ marginTop: 10, display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "8px 18px", borderRadius: 10, border: "2px solid #ef4444", background: "#200606", boxShadow: "0 0 16px rgba(239,68,68,.45)" }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, color: "#fecaca" }}>
-                    <span style={{ fontSize: 20 }}>🪓</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, opacity: .85 }}>処刑</span>
-                    <span style={{ fontSize: 26, fontWeight: 900 }}>{est?.dmg ?? "?"}</span>
-                  </div>
-                  <div data-testid="execution-threshold" style={{ fontSize: 11, fontWeight: 700, color: "#fca5a5" }}>1行動で{threshold}以上なら中断</div>
-                </div>
-              );
-            }
+      {enemy && (() => {
+        let intentPanel = null;
+        if (enemy.intent) {
+          if (isHeavyCounterplayEnemy(enemy) && enemy.intent === "heavy") {
+            const est = estimateIntentDamage(enemy);
+            const threshold = Math.ceil(enemy.maxHp * HEAVY_COUNTERPLAY.damageThreshold);
+            intentPanel = <EnemyIntentPanel mode="execution" dmg={est?.dmg} threshold={threshold} />;
+          } else {
             const it = INTENTS[enemy.intent];
             const est = estimateIntentDamage(enemy);
             const isThreat = ["attack", "heavy", "venom", "flurry"].includes(enemy.intent);
             const col = enemy.intent === "heavy" ? "#f87171" : enemy.intent === "flurry" ? "#fb923c" : enemy.intent === "roar" ? "#fb923c" : enemy.intent === "guard" ? "#60a5fa" : enemy.intent === "venom" ? "#c084fc" : "#e7e5e4";
-            return (
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: col, background: "#0c0a09", border: `1px solid ${col}`, borderRadius: 6, padding: "4px 10px", display: "inline-block" }}>
-                次の行動:{it.icon}{it.name}{enemy.intent === "flurry" ? "×3" : ""}
-                {isThreat ? `(約${est.dmg} / 🛡️防御なら約${est.def})` : enemy.intent === "guard" ? "(被ダメ-50%)" : "(攻撃力UP)"}
-                {enemy.intent === "venom" ? " +毒付与(防御で無効)" : ""}
-                {enemy.gimmick === "burrow" && enemy.burrowedNext ? " 🪱潜伏明け強化" : ""}
-                {enemy.pattern ? " 🔁" : ""}
-              </div>
+            intentPanel = (
+              <EnemyIntentPanel
+                mode="generic" icon={it.icon} name={it.name} isFlurry={enemy.intent === "flurry"}
+                isThreat={isThreat} dmg={est.dmg} defDmg={est.def}
+                isGuard={enemy.intent === "guard"} isVenom={enemy.intent === "venom"}
+                isBurrowedNext={enemy.gimmick === "burrow" && enemy.burrowedNext}
+                hasPattern={!!enemy.pattern} color={col}
+              />
             );
-          })()}
-          {rhythmFor(enemy) && (() => {
-            const rhythm = rhythmFor(enemy);
-            const state = enemy.rhythmState || {};
-            const exposed = state.phase === "exposed" || state.phase === "overheated";
-            const label = rhythm.key === "executioner" ? (state.phase === "exposed" ? "💥 装甲崩壊" : "🛡️ 装甲防御") : rhythm.key === "dragon" ? (state.phase === "flying" ? "🐉 飛翔" : state.phase === "breath" ? "🔥 次:ブレス" : "♨️ 過熱") : state.phase === "exposed" ? "💥 障壁崩壊" : "💎 共鳴障壁";
-            const remaining = rhythm.key === "dragon" ? `${state.actionsLeft ?? 0}行動` : rhythm.key === "crystal" ? `${state.categories?.length || 0}/3カテゴリ` : state.phase === "exposed" ? "弱点: 次の1行動まで" : `処刑まで ${executionCountdown(enemy) ?? "?"}行動`;
-            if (rhythm.key !== "executioner") {
-              const valid = rhythm.key === "crystal" ? ["attack", "skill", "defend", "status", "heal"].filter(category => category !== state.lastCategory).join(" / ") : state.phase === "flying" ? "防御 / 回復 / バフ / 状態異常" : "高火力";
-              return <div data-testid="combat-rhythm" style={{ marginTop: 6, padding: 7, borderRadius: 7, border: `1px solid ${exposed ? "#fbbf24" : "#60a5fa"}`, background: exposed ? "#422006" : "#0c1b33", boxShadow: exposed ? "0 0 14px rgba(251,191,36,.35)" : "none" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800 }}><span>{label}</span><span>{remaining}</span><span>直接×{previewPlayerAction(enemy, "attack").multiplier.toFixed(2)}</span></div>
-                <div style={{ fontSize: 10, color: "#a8a29e", marginTop: 3 }}>有効: {valid}</div>
-              </div>;
-            }
-            if (!exposed) return null; // 通常の装甲状態では軽減率・装甲についての表示を出さない(攻撃/スキルボタンの予想ダメージ側で判断させる)
+          }
+        }
+
+        let rhythmChip = null;
+        const rhythm = rhythmFor(enemy);
+        if (rhythm) {
+          const state = enemy.rhythmState || {};
+          const rhythmExposed = state.phase === "exposed" || state.phase === "overheated";
+          const label = rhythm.key === "executioner" ? (state.phase === "exposed" ? "💥 装甲崩壊" : "🛡️ 装甲防御") : rhythm.key === "dragon" ? (state.phase === "flying" ? "🐉 飛翔" : state.phase === "breath" ? "🔥 次:ブレス" : "♨️ 過熱") : state.phase === "exposed" ? "💥 障壁崩壊" : "💎 共鳴障壁";
+          const remaining = rhythm.key === "dragon" ? `${state.actionsLeft ?? 0}行動` : rhythm.key === "crystal" ? `${state.categories?.length || 0}/3カテゴリ` : state.phase === "exposed" ? "弱点: 次の1行動まで" : `処刑まで ${executionCountdown(enemy) ?? "?"}行動`;
+          if (rhythm.key !== "executioner") {
+            const valid = rhythm.key === "crystal" ? ["attack", "skill", "defend", "status", "heal"].filter(category => category !== state.lastCategory).join(" / ") : state.phase === "flying" ? "防御 / 回復 / バフ / 状態異常" : "高火力";
+            const CATEGORY_LABELS = { attack: "攻撃", skill: "技", defend: "防御", status: "状態", heal: "回復" };
+            rhythmChip = (
+              <CombatStatusChip testId="combat-rhythm" tone={rhythmExposed ? "chance" : "guard"} pulse={rhythmExposed} style={{ marginTop: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 800 }}>
+                  <span>{label}</span><span>{remaining}</span><span>直接×{previewPlayerAction(enemy, "attack").multiplier.toFixed(2)}</span>
+                </div>
+                {rhythm.key === "crystal" ? (
+                  <div role="group" aria-label={`有効: ${valid}`} title={`有効: ${valid}`} style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
+                    {Object.keys(CATEGORY_LABELS).map(cat => {
+                      const active = cat !== state.lastCategory;
+                      return (
+                        <span key={cat} style={{
+                          fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 999,
+                          background: active ? "rgba(96,165,250,.18)" : "rgba(255,255,255,.04)",
+                          color: active ? COMBAT_TONES.guard.text : "#57534e",
+                          border: `1px solid ${active ? COMBAT_TONES.guard.border : "#3a3532"}`,
+                        }}>{CATEGORY_LABELS[cat]}</span>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 10, opacity: .85 }}>有効: {valid}</div>
+                )}
+              </CombatStatusChip>
+            );
+          } else if (rhythmExposed) {
+            // 通常の装甲状態では軽減率・装甲についての表示を出さない(攻撃/スキルボタンの予想ダメージ側で判断させる)
             const damagePercent = Math.round(previewPlayerAction(enemy, "attack").multiplier * 100);
-            return <div data-testid="combat-rhythm" style={{ marginTop: 8, display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999, border: "1px solid #fbbf24", background: "#3a2308", boxShadow: "0 0 10px rgba(251,191,36,.4)" }}>
-              <span data-testid="damage-efficiency" style={{ color: "#fde047", fontSize: 15, fontWeight: 900 }}>💥 {damagePercent / 100}倍</span>
-              <span data-testid="armor-broken-badge" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", background: "#fbbf24", color: "#422006", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>①</span>
-            </div>;
-          })()}
-          {enemy.guardTurns > 0 && <div style={{ fontSize: 11, color: "#60a5fa", marginTop: 4 }}>🛡️ 構え中(受けるダメージ-50%)</div>}
-          {enemy.status && Object.entries(enemy.status).some(([, v]) => v.turns > 0) && (
-            <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 6, flexWrap: "wrap" }}>
-              {Object.entries(enemy.status).filter(([, v]) => v.turns > 0).map(([k, v]) => (
-                <span key={k} style={{ fontSize: 11, color: STATUS[k].color, border: `1px solid ${STATUS[k].color}`, borderRadius: 4, padding: "1px 6px" }}>
-                  {STATUS[k].icon}{STATUS[k].name}{v.turns}T{k === "poison" || k === "bleed" ? `(${v.dmg})` : k === "weaken" ? `(-${v.dmg}%)` : ""}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+            rhythmChip = (
+              <CombatStatusChip testId="combat-rhythm" tone="chance" compact pulse style={{ marginTop: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span data-testid="damage-efficiency" style={{ fontSize: 15, fontWeight: 900 }}>💥 {damagePercent / 100}倍</span>
+                  <span data-testid="armor-broken-badge" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", background: COMBAT_TONES.chance.strong, color: "#422006", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>①</span>
+                </div>
+              </CombatStatusChip>
+            );
+          }
+        }
+
+        return (
+          <EnemyCombatCard
+            enemy={enemy}
+            atkDisplay={Math.round(enemy.atk * enemyAtkMult(enemy))}
+            atkBoosted={enemyAtkMult(enemy) > 1}
+            dangerPulse={isHeavyCounterplay(enemy)}
+            exposed={enemy.rhythmState?.phase === "exposed"}
+            hitFxAnimation={enemyHitFx > 0 ? `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out` : "none"}
+            popups={enemyPopups}
+            executionCount={isHeavyCounterplayEnemy(enemy) ? executionCountdown(enemy) : null}
+            intentPanel={intentPanel}
+            rhythmChip={rhythmChip}
+          />
+        );
+      })()}
 
       {/* プレイヤー */}
-      <div data-testid="player-card" style={{ border: `1px solid ${enemy?.rhythmState?.parryReady ? "#60a5fa" : "transparent"}`, background: enemy?.rhythmState?.parryReady ? "#0b1b32" : "transparent", borderRadius: 9, padding: enemy?.rhythmState?.parryReady ? 8 : 0, marginBottom: 8, animation: enemy?.rhythmState?.parryReady ? "abyss-ready-glow 1.1s ease-in-out infinite" : "none" }}>
+      <div data-testid="player-card" className={enemy?.rhythmState?.parryReady ? "abyss-animated" : undefined} style={{ border: `1px solid ${enemy?.rhythmState?.parryReady ? COMBAT_TONES.guard.border : "transparent"}`, background: enemy?.rhythmState?.parryReady ? COMBAT_TONES.guard.bg : "transparent", borderRadius: 9, padding: enemy?.rhythmState?.parryReady ? 8 : 0, marginBottom: 8, animation: enemy?.rhythmState?.parryReady ? "abyss-ready-glow 1.1s ease-in-out infinite" : "none" }}>
       <div style={{ marginBottom: 4, display: "flex", justifyContent: "space-between", fontSize: 12, color: "#a8a29e" }}>
         <span>あなた
           {player.cls === "warrior" && (player.fury || 0) > 0 ? <span style={{ color: "#f87171" }}>　🔥闘志{player.fury}/{player.variant === "b" ? 7 : 5}</span> : null}
@@ -3791,27 +3765,37 @@ export default function HackRoguelike() {
         {(() => {
           const range = directDamagePreview({ mult: 1, hits: 1 }, false, "attack");
           const interrupts = willInterruptExecution(range);
-          return <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={{ ...btnStyle(false), opacity: buttonOpacity("attack"), minHeight: 58, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
-            {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
-            <div style={isExecutionerFight ? { fontSize: 11, fontWeight: 600, opacity: .85 } : undefined}>⚔️ 攻撃</div>
-            <div data-testid="attack-damage-preview" style={isExecutionerFight ? { fontSize: 17, fontWeight: 900, marginTop: 3 } : { fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>
-            {damagePreviewCaption("attack") && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, "attack").multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption("attack")}</div>}
-          </button>;
+          const caption = damagePreviewCaption("attack");
+          return (
+            <CombatActionButton
+              testId="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")}
+              accent={COMBAT_TONES.attack.strong} label="⚔️ 攻撃"
+              primaryValue={`予想 ${range.min}〜${range.max}`} primaryTestId="attack-damage-preview"
+              secondaryCaption={caption || null} secondaryTone={previewPlayerAction(enemy, "attack").multiplier > 1 ? "#fde047" : "#fca5a5"}
+              interrupt={interrupts} ineffective={!previewPlayerAction(enemy, "attack").effective} minHeight={58}
+            />
+          );
         })()}
         {(() => {
           const defendDisabled = stats.noDefend > 0 || player.petrified;
           const interrupts = !defendDisabled && isHeavyCounterplay(enemy) && !!enemy.rhythmState?.parryReady;
           const threat = isHeavyCounterplayEnemy(enemy) && enemy?.intent && ["attack", "heavy", "venom", "flurry"].includes(enemy.intent);
           const est = threat ? estimateIntentDamage(enemy) : null;
-          return <button onClick={useDefend} disabled={defendDisabled} style={{ ...btnStyle(defendDisabled, "#1e40af"), opacity: buttonOpacity("defend"), minHeight: est ? 58 : undefined, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
-            {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
-            <div style={isExecutionerFight ? { fontSize: 11, fontWeight: 600, opacity: .85 } : undefined}>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</div>
-            {est && <div data-testid="defend-damage-preview" style={isExecutionerFight ? { fontSize: 17, fontWeight: 900, marginTop: 3 } : { fontSize: 11, marginTop: 3 }}>被ダメ {est.def}</div>}
-          </button>;
+          return (
+            <CombatActionButton
+              onClick={useDefend} disabled={defendDisabled} accent={COMBAT_TONES.guard.strong}
+              label={stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}
+              primaryValue={est ? `被ダメ ${est.def}` : null} primaryTestId="defend-damage-preview"
+              interrupt={interrupts} ineffective={!defendDisabled && !previewPlayerAction(enemy, "defend").effective}
+              minHeight={est ? 58 : undefined}
+            />
+          );
         })()}
-        <button data-testid="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={{ ...btnStyle(player.potions <= 0 || player.petrified, "#166534"), opacity: buttonOpacity("heal") }}>
-          🧪 ×{player.potions}
-        </button>
+        <CombatActionButton
+          testId="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified}
+          accent={COMBAT_TONES.heal.strong} label="🧪" primaryValue={`×${player.potions}`}
+          ineffective={player.potions > 0 && !player.petrified && !previewPlayerAction(enemy, "heal").effective}
+        />
       </div>
       {!(stats.noSkill > 0) && (
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -3822,13 +3806,18 @@ export default function HackRoguelike() {
             const category = s.status ? "status" : ["heal", "shield"].includes(s.kind) ? "heal" : ["guard", "parry"].includes(s.kind) ? "defend" : "skill";
             const range = !s.spec.kind ? directDamagePreview(s.spec, true, category, k) : null;
             const interrupts = !dis && willInterruptExecution(range, s.spec);
+            const caption = range ? damagePreviewCaption(category) : null;
+            const skillAccent = category === "defend" ? COMBAT_TONES.guard.strong : category === "heal" ? COMBAT_TONES.heal.strong : category === "status" ? COMBAT_TONES.status.strong : COMBAT_TONES.attack.strong;
             return (
-              <button data-testid={`skill-button-${k}`} key={k} onClick={() => castSkill(k)} disabled={dis} style={{ ...btnStyle(dis, "#7c2d12"), fontSize: 13, opacity: buttonOpacity(category), minHeight: 58, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
-                {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
-                <div style={isExecutionerFight ? { fontSize: 11, fontWeight: 600, opacity: .85 } : undefined}>{s.icon} {s.name}{(player.skillMods || {})[k] ? SKILL_MODS[(player.skillMods || {})[k]].icon : ""}{cd > 0 ? ` (${cd})` : ""}</div>
-                {range && <div style={isExecutionerFight ? { fontSize: 16, fontWeight: 900, marginTop: 3 } : { fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>}
-                {range && damagePreviewCaption(category) && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, category).multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption(category)}</div>}
-              </button>
+              <CombatActionButton
+                key={k} testId={`skill-button-${k}`} onClick={() => castSkill(k)} disabled={dis}
+                accent={skillAccent}
+                label={<>{s.icon} {s.name}{(player.skillMods || {})[k] ? SKILL_MODS[(player.skillMods || {})[k]].icon : ""}{cd > 0 ? ` (${cd})` : ""}</>}
+                primaryValue={range ? `予想 ${range.min}〜${range.max}` : null}
+                secondaryCaption={caption || null} secondaryTone={range && previewPlayerAction(enemy, category).multiplier > 1 ? "#fde047" : "#fca5a5"}
+                interrupt={interrupts} ineffective={!dis && !previewPlayerAction(enemy, category).effective}
+                minHeight={58}
+              />
             );
           })}
         </div>
