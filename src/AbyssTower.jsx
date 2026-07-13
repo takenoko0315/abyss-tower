@@ -627,6 +627,11 @@ export default function HackRoguelike() {
     return dmg;
   };
 
+  const recordHeavyCounterplay = (e, key) => {
+    if (e.name !== HEAVY_COUNTERPLAY.enemyName) return;
+    e.counterplayCounts = { ...(e.counterplayCounts || {}), [key]: (e.counterplayCounts?.[key] || 0) + 1 };
+  };
+
   const enemyTurn = (p, e, skipThorns = false, hitLog = null, enemyStatusLog = null) => {
     // 捌きの構え:このターン限りの予約。使うかどうかに関わらずこの呼び出しで消費される
     const parryReady = !!p.parryReady;
@@ -674,6 +679,7 @@ export default function HackRoguelike() {
     if (enemyEffects.stopReason === "enemyDead") return p; // 継続ダメージで撃破
     if (e.heavyCounterplayInterrupt) {
       e.counterplayOutcome = e.heavyCounterplayInterrupt;
+      recordHeavyCounterplay(e, e.heavyCounterplayInterrupt === "damage" ? "damageInterrupts" : "ccInterrupts");
       delete e.heavyCounterplayInterrupt;
       e.intent = rollIntent(e);
       if (p.defending) p = { ...p, defending: false };
@@ -856,12 +862,14 @@ export default function HackRoguelike() {
         addLog(`🛡️ 防御で毒を防いだ！`, "info");
       }
     }
-    if (defendedHeavyDamage) {
+    if (defendedHeavyDamage && (stats.noDefend || 0) <= 0) {
       p = grantRiposte(p);
       e.counterplayOutcome = "defend";
+      recordHeavyCounterplay(e, "riposteGained");
       addLog("🛡️ 大技を防御！ 反撃態勢を獲得", "gold");
-    } else if (isHeavyCounterplay(e)) {
+    } else if (isHeavyCounterplay(e) && !p.defending) {
       e.counterplayOutcome = "unanswered";
+      recordHeavyCounterplay(e, "unanswered");
     }
     // 次のターンの行動を予告
     e.intent = rollIntent(e);
@@ -1705,7 +1713,10 @@ export default function HackRoguelike() {
     if (p.petrified) p = { ...p, petrified: false }; // 石化は攻撃行動で解ける
     const riposte = consumeRiposte(p);
     p = riposte.nextPlayer;
-    if (riposte.consumed) addLog("⚔️ 反撃態勢を解放！ 次の直接攻撃+30%", "gold");
+    if (riposte.consumed) {
+      recordHeavyCounterplay(e, "riposteConsumed");
+      addLog("⚔️ 反撃態勢を解放！ 次の直接攻撃+30%", "gold");
+    }
     const catalystBoost = !!p.nextAtkDouble;
     if (catalystBoost) p.nextAtkDouble = false;
     const mod = usedSkill ? (player.skillMods || {})[usedSkill] : null;
@@ -2511,11 +2522,11 @@ export default function HackRoguelike() {
         },
         patchPlayer: (patch) => setPlayer(current => ({
           ...current,
-          ...selectPatch(patch, ["hp", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance"]),
+          ...selectPatch(patch, ["hp", "atk", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance", "defendedLast", "heavyRiposte", "skills"]),
         })),
         patchEnemy: (patch) => setEnemy(current => current ? {
           ...current,
-          ...selectPatch(patch, ["hp", "maxHp", "atk", "trait", "gimmick", "guardTurns", "status", "intent"]),
+          ...selectPatch(patch, ["name", "hp", "maxHp", "atk", "trait", "gimmick", "guardTurns", "status", "intent", "pattern", "patternIdx", "isBoss"]),
         } : current),
         runEnemyTurn: () => {
           const nextEnemy = { ...enemy, status: enemy?.status ? { ...enemy.status } : undefined };

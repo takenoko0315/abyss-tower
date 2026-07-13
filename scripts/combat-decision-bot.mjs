@@ -12,6 +12,7 @@ import fs from "node:fs";
 import * as esbuild from "esbuild";
 import { BLESSINGS, CLASSES, DIFFICULTIES } from "../src/game/data.js";
 import { pairComparison, summarizeOutcomes } from "./lib/combat-stats.mjs";
+import { HEAVY_COUNTERPLAY } from "../src/game/heavyCounterplay.js";
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CACHE_DIR = path.join(PROJECT_ROOT, "node_modules", ".combat-decision-bot-cache");
@@ -188,6 +189,7 @@ function summarize(results) {
     combatTurns: 0, counts: { attack: 0, defend: 0, skill: 0, potion: 0 },
     heavyOrFlurryTelegraphed: 0, defendedVsHeavy: 0, guardTurnsSeen: 0, attackedVsGuard: 0,
     mitigatedDamageEstimate: 0, potionOverhealEstimate: 0, ccThreatTurnsSeen: 0,
+    heavyCounterplay: { telegraphs: 0, defended: 0, riposteGained: 0, riposteConsumed: 0, damageInterrupts: 0, ccInterrupts: 0, unanswered: 0, survival: {} },
   });
   const sum = (fn) => m.reduce((a, x) => a + fn(x), 0);
 
@@ -196,6 +198,12 @@ function summarize(results) {
   const totalDefend = sum(x => x.counts.defend);
   const totalSkill = sum(x => x.counts.skill);
   const totalPotion = sum(x => x.counts.potion);
+  const hcSum = key => sum(x => x.heavyCounterplay?.[key] || 0);
+  const hcSurvival = method => {
+    const total = sum(x => x.heavyCounterplay?.survival?.[method]?.sum || 0);
+    const count = sum(x => x.heavyCounterplay?.survival?.[method]?.n || 0);
+    return { total, count, avg: count ? total / count : 0 };
+  };
   const totalHeavyTelegraphed = sum(x => x.heavyOrFlurryTelegraphed);
   const totalDefendedVsHeavy = sum(x => x.defendedVsHeavy);
   const totalGuardSeen = sum(x => x.guardTurnsSeen);
@@ -213,6 +221,17 @@ function summarize(results) {
   const byKeystone = {};
   for (const r of results) (byKeystone[keystoneLabel(r.blessing)] ??= []).push(r.floor || 0);
 
+  const heavyCounterplay = {
+    telegraphs: hcSum("telegraphs"),
+    defended: hcSum("defended"),
+    riposteGained: hcSum("riposteGained"),
+    riposteConsumed: hcSum("riposteConsumed"),
+    damageInterrupts: hcSum("damageInterrupts"),
+    ccInterrupts: hcSum("ccInterrupts"),
+    unanswered: hcSum("unanswered"),
+    survival: { defend: hcSurvival("defend"), damage: hcSurvival("damage"), cc: hcSurvival("cc") },
+    targetDeaths: results.filter(r => r.result === "dead" && r.lastEnemy?.name === HEAVY_COUNTERPLAY.enemyName).length,
+  };
   return {
     ...outcome,
     deaths: deaths.length,
@@ -234,6 +253,18 @@ function summarize(results) {
     potionUses: totalPotion,
     potionOverhealEstimate: sum(x => x.potionOverhealEstimate),
     ccThreatTurnsSeen: sum(x => x.ccThreatTurnsSeen),
+    heavyCounterplay,
+    heavyTelegraphs: heavyCounterplay.telegraphs,
+    heavyDefended: heavyCounterplay.defended,
+    riposteGained: heavyCounterplay.riposteGained,
+    riposteConsumed: heavyCounterplay.riposteConsumed,
+    heavyDamageInterrupts: heavyCounterplay.damageInterrupts,
+    heavyCcInterrupts: heavyCounterplay.ccInterrupts,
+    heavyUnanswered: heavyCounterplay.unanswered,
+    survivalAfterDefend: heavyCounterplay.survival.defend.avg,
+    survivalAfterDamageInterrupt: heavyCounterplay.survival.damage.avg,
+    survivalAfterCcInterrupt: heavyCounterplay.survival.cc.avg,
+    heavyTargetDeaths: heavyCounterplay.targetDeaths,
     errorSamples: errors.slice(0, 5).map(e => ({ floor: e.floor, cls: e.cls, message: e.error?.message })),
   };
 }
@@ -263,6 +294,12 @@ function printComparisonReport(summaries, totalSec, buildSec) {
     ["回復薬使用回数", s => String(s.potionUses)],
     ["回復薬の推定過剰回復合計", s => String(s.potionOverhealEstimate)],
     ["大技/連攻予告中のCC残存ターン数", s => String(s.ccThreatTurnsSeen)],
+    [`${HEAVY_COUNTERPLAY.enemyName} 大技予告回数`, s => String(s.heavyCounterplay.telegraphs)],
+    ["対象大技への防御回数", s => String(s.heavyCounterplay.defended)],
+    ["反撃態勢獲得/消費", s => `${s.heavyCounterplay.riposteGained}/${s.heavyCounterplay.riposteConsumed}`],
+    ["火力中断/CC中断/無対策", s => `${s.heavyCounterplay.damageInterrupts}/${s.heavyCounterplay.ccInterrupts}/${s.heavyCounterplay.unanswered}`],
+    ["対処後の平均生存ターン(防/火/CC)", s => `${s.heavyCounterplay.survival.defend.avg.toFixed(1)}/${s.heavyCounterplay.survival.damage.avg.toFixed(1)}/${s.heavyCounterplay.survival.cc.avg.toFixed(1)}`],
+    ["対象敵による死亡数", s => String(s.heavyCounterplay.targetDeaths)],
   ];
   const policyNames = Object.keys(summaries);
   const colWidth = Math.max(24, ...policyNames.map(p => p.length + 2));
@@ -319,6 +356,9 @@ function writeOutputs(byPolicy, summaries, pairStats) {
     "n", "avgFloor", "medianFloor", "maxFloor", "clearRate", "deaths", "timeouts", "errors",
     "avgCombatTurns", "nonAttackRatio", "defendVsHeavyRate", "attackVsGuardRate",
     "mitigatedDamageEstimate", "potionUses", "potionOverhealEstimate", "ccThreatTurnsSeen",
+    "heavyTelegraphs", "heavyDefended", "riposteGained", "riposteConsumed", "heavyDamageInterrupts",
+    "heavyCcInterrupts", "heavyUnanswered", "survivalAfterDefend", "survivalAfterDamageInterrupt",
+    "survivalAfterCcInterrupt", "heavyTargetDeaths",
   ];
   const policyNames = Object.keys(summaries);
   const csvLines = ["metric," + policyNames.join(",")];

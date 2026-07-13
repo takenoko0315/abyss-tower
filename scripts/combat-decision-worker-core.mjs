@@ -8,6 +8,7 @@ import { clickByText } from "./lib/dom-actions.mjs";
 import { nonCombatAction } from "./lib/standard-scene-actions.mjs";
 import { POLICIES, decisionCandidates, isBigThreat } from "./lib/combat-policies.mjs";
 import { installSeededRandom, rerollSeed } from "./lib/seeded-rng.mjs";
+import { HEAVY_COUNTERPLAY } from "../src/game/heavyCounterplay.js";
 
 const args = Object.fromEntries(
   process.argv.slice(2).map(a => {
@@ -68,6 +69,11 @@ function emptyMetrics() {
     mitigatedDamageEstimate: 0,
     potionOverhealEstimate: 0,
     ccThreatTurnsSeen: 0,
+    heavyCounterplay: {
+      telegraphs: 0, defended: 0, riposteGained: 0, riposteConsumed: 0,
+      damageInterrupts: 0, ccInterrupts: 0, unanswered: 0,
+      survival: { defend: { sum: 0, n: 0 }, damage: { sum: 0, n: 0 }, cc: { sum: 0, n: 0 } },
+    },
   };
 }
 
@@ -95,6 +101,31 @@ function playOneRun(rngSeed, pairedSeed) {
   const metrics = emptyMetrics();
   let actions = 0;
   let lastEnemy = null;
+  let targetTurns = 0;
+  let trackingTarget = false;
+  let pendingResponses = [];
+  let observedCounterplay = {};
+  const syncCounterplayCounts = currentEnemy => {
+    if (currentEnemy?.name !== HEAVY_COUNTERPLAY.enemyName) return;
+    const counts = currentEnemy.counterplayCounts || {};
+    for (const key of ["riposteGained", "riposteConsumed", "damageInterrupts", "ccInterrupts", "unanswered"]) {
+      const delta = Math.max(0, (counts[key] || 0) - (observedCounterplay[key] || 0));
+      metrics.heavyCounterplay[key] += delta;
+      const method = key === "damageInterrupts" ? "damage" : key === "ccInterrupts" ? "cc" : key === "riposteGained" ? "defend" : null;
+      for (let i = 0; method && i < delta; i++) pendingResponses.push({ method, turn: targetTurns });
+    }
+    observedCounterplay = { ...counts };
+  };
+  const finishTargetBattle = () => {
+    for (const response of pendingResponses) {
+      const bucket = metrics.heavyCounterplay.survival[response.method];
+      bucket.sum += Math.max(0, targetTurns - response.turn);
+      bucket.n++;
+    }
+    pendingResponses = [];
+    trackingTarget = false;
+    targetTurns = 0;
+  };
   try {
     dom.window.localStorage.clear();
     ({ container, unmount } = render(React.createElement(HackRoguelike)));
@@ -102,6 +133,10 @@ function playOneRun(rngSeed, pairedSeed) {
       actions++;
       const d = dbg();
       if (!d) throw new Error("window.__abyssDebugが未初期化(初回レンダリング未完了)");
+      syncCounterplayCounts(d.enemy);
+      const targetCombat = d.scene === "combat" && d.enemy?.name === HEAVY_COUNTERPLAY.enemyName;
+      if (trackingTarget && !targetCombat) finishTargetBattle();
+      if (targetCombat) trackingTarget = true;
       if (d.scene === "combat" && d.enemy) lastEnemy = { name: d.enemy.name, gimmick: d.enemy.gimmick, floor: d.floor };
       if (d.scene === "dead") return { result: "dead", floor: d.floor, cls: d.player.cls, blessing: d.player.blessing, lastEnemy, actions, seed: pairedSeed, rngSeed, metrics };
       if (d.scene === "victory") return { result: "victory", floor: 20, cls: d.player.cls, blessing: d.player.blessing, lastEnemy, actions, seed: pairedSeed, rngSeed, metrics };
@@ -118,6 +153,7 @@ function playOneRun(rngSeed, pairedSeed) {
 
       // ===== 戦闘シーン: 判断方針を適用し、判断価値の指標を収集する =====
       const telegraphedBig = isBigThreat(d.enemy);
+      const targetHeavy = targetCombat && d.enemy.intent === "heavy";
       const guarding = (d.enemy?.guardTurns || 0) > 0;
       const ccPending = telegraphedBig
         && ((d.enemy?.status?.freeze?.turns || 0) > 0 || (d.enemy?.status?.stun?.turns || 0) > 0);
@@ -128,11 +164,16 @@ function playOneRun(rngSeed, pairedSeed) {
       if (!actual) throw new Error(`シーン"combat"でクリック可能なボタンが見つからない`);
 
       metrics.combatTurns++;
+      if (targetCombat) targetTurns++;
       metrics.counts[actual]++;
       if (telegraphedBig) metrics.heavyOrFlurryTelegraphed++;
       if (guarding) metrics.guardTurnsSeen++;
       if (ccPending) metrics.ccThreatTurnsSeen++;
       if (actual === "defend" && telegraphedBig) metrics.defendedVsHeavy++;
+      if (targetHeavy) {
+        metrics.heavyCounterplay.telegraphs++;
+        if (actual === "defend") metrics.heavyCounterplay.defended++;
+      }
       if (actual === "attack" && guarding) metrics.attackedVsGuard++;
       if (actual === "potion") {
         metrics.potionOverhealEstimate += Math.max(
@@ -160,6 +201,8 @@ function playOneRun(rngSeed, pairedSeed) {
       floor: d?.floor, cls: d?.player?.cls, blessing: d?.player?.blessing, lastEnemy, actions, seed: pairedSeed, rngSeed, metrics,
     };
   } finally {
+    syncCounterplayCounts(dbg()?.enemy);
+    if (trackingTarget) finishTargetBattle();
     restoreRandom();
     if (unmount) unmount();
     cleanup();
