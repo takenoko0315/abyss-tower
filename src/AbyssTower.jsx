@@ -25,6 +25,7 @@ import {
   isHeavyCounterplayEnemy,
   resolveHeavyCounterplay,
 } from "./game/heavyCounterplay.js";
+import { initializeRhythm, previewPlayerAction, resolveEnemyRhythmAction, resolvePlayerRhythmAction, rhythmFor } from "./game/combatRhythm.js";
 
 let ACTIVE_DIFF = DIFFICULTIES.normal;
 
@@ -186,7 +187,7 @@ function genEnemy(floor, elite = false, traitKey = null) {
   if (isFinal) { e.pattern = base.pattern; e.patternIdx = 0; }
   else if (isBoss) { e.pattern = base.pattern || BOSS_PATTERNS[(Math.floor(floor / 5) - 1 + BOSS_PATTERNS.length) % BOSS_PATTERNS.length]; e.patternIdx = 0; }
   e.intent = rollIntent(e);
-  return e;
+  return initializeRhythm(e);
 }
 
 // 激昂(オーク)込みの実効攻撃倍率。予告ダメージ表示と実処理で共有する
@@ -369,7 +370,7 @@ export default function HackRoguelike() {
   const [playerHitFx, setPlayerHitFx] = useState({ nonce: 0, heavy: false }); // 画面端フラッシュ再生用
   const sandboxEnabled = import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("combatSandbox") === "1";
   const [sandboxMode, setSandboxMode] = useState(false);
-  const [sandboxConfig, setSandboxConfig] = useState({ enemy: "鉄の処刑人", floor: 10, cls: "warrior", blessing: "", contract: "none", equipment: "none", hp: 100, seed: 7001, patternIdx: 2, intent: "heavy" });
+  const [sandboxConfig, setSandboxConfig] = useState({ enemy: "鉄の処刑人", floor: 10, cls: "warrior", blessing: "", contract: "none", equipment: "none", hp: 100, seed: 7001, patternIdx: 2, intent: "heavy", rhythmPhase: "default" });
   const sandboxNativeRandom = useRef(null);
   const sandboxSnapshot = useRef(null);
   useEffect(() => () => {
@@ -643,7 +644,8 @@ export default function HackRoguelike() {
     base = candidates.find(item => item.name === cfg.enemy) || BOSS_POOLS[1].find(item => item.counterplay === "heavy-v1");
     cfg.enemy = base.name;
     e = genEnemy(cfg.floor);
-    e = { ...e, ...base, codexId: base.name, hp: e.maxHp, patternIdx: cfg.patternIdx, intent: cfg.intent, status: {}, guardTurns: 0 };
+    const phaseOverride = cfg.rhythmState || (cfg.rhythmPhase === "default" ? {} : cfg.rhythmPhase === "parry-ready" ? { phase: "armored", parryReady: true } : cfg.rhythmPhase === "flying" ? { phase: "flying", actionsLeft: 2 } : cfg.rhythmPhase === "overheated" ? { phase: "overheated", actionsLeft: 2 } : cfg.rhythmPhase === "breath" ? { phase: "breath", actionsLeft: 0 } : cfg.rhythmPhase === "crystal-exposed" ? { phase: "exposed", categories: [] } : { phase: cfg.rhythmPhase });
+    e = initializeRhythm({ ...e, ...base, codexId: base.name, hp: e.maxHp, patternIdx: cfg.patternIdx, intent: cfg.intent, status: {}, guardTurns: 0 }, phaseOverride);
     const maxHp = totalStats(p, sandboxEquip).maxHp;
     p.hp = Math.max(1, Math.min(maxHp, Math.round(maxHp * cfg.hp / 100)));
     } catch (error) {
@@ -978,7 +980,11 @@ export default function HackRoguelike() {
         addLog(`🛡️ 防御で毒を防いだ！`, "info");
       }
     }
-    if (defendedHeavyDamage && p.hp > 0 && e.hp > 0 && (stats.noDefend || 0) <= 0) {
+    const rhythmEnemyResult = resolveEnemyRhythmAction(e, { intent: act, defended: defendedHeavyDamage });
+    Object.assign(e, rhythmEnemyResult.enemy);
+    if (rhythmEnemyResult.events.some(event => event.type === "armor-broken")) addLog("🪓 処刑を受け流した！装甲崩壊", "gold");
+    if (rhythmEnemyResult.events.some(event => event.type === "overheated")) addLog("🔥 ブレス後の過熱！弱点が露出", "gold");
+    if (defendedHeavyDamage && p.hp > 0 && e.hp > 0 && (stats.noDefend || 0) <= 0 && rhythmFor(e)?.key !== "executioner") {
       p = grantRiposte(p);
       e.counterplayOutcome = "defend";
       recordHeavyCounterplay(e, "riposteGained");
@@ -1829,6 +1835,8 @@ export default function HackRoguelike() {
     const baseEnemy = flushed ? flushed.enemy : enemy;
     const counterplayEnemyBefore = { ...baseEnemy, status: baseEnemy.status ? Object.fromEntries(Object.entries(baseEnemy.status).map(([k, v]) => [k, { ...v }])) : undefined };
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
+    const rhythmCategory = usedSkill ? "skill" : "attack";
+    const rhythmPreview = previewPlayerAction(e, rhythmCategory);
     let p = { ...basePlayer };
     if (isHeavyCounterplayEnemy(e)) delete e.counterplayOutcome;
     if (p.petrified) p = { ...p, petrified: false }; // 石化は攻撃行動で解ける
@@ -1890,6 +1898,7 @@ export default function HackRoguelike() {
       if (isCrit) { critLanded = true; critCount++; }
       hitsDone++;
       let mult = spec.execute && e.hp / e.maxHp <= 0.3 ? 3.0 : spec.mult;
+      mult *= rhythmPreview.multiplier;
       if (spec.punish && (e.intent === "guard" || e.intent === "heavy")) mult = 2.5; // 月光斬:構え/大技の予告を狩る
       if (mod === "ampMod") mult *= 1.3;                                   // モッド増幅
       if (hasNode(player, "m3") && usedSkill) mult *= 1.25;               // 魔力収束:スキルダメ+25%
@@ -2121,6 +2130,7 @@ export default function HackRoguelike() {
         addLog(`🔥 魔力で${e.name}が燃え上がる！`, "dmg");
       }
     }
+    if (e.hp > 0) e = resolvePlayerRhythmAction(e, rhythmCategory).enemy;
     const counterplay = e.hp > 0 ? resolveHeavyCounterplay({
       enemyBefore: counterplayEnemyBefore,
       enemyAfter: e,
@@ -2128,6 +2138,7 @@ export default function HackRoguelike() {
     }) : { interrupted: false, method: null };
     if (counterplay.interrupted) {
       e.heavyCounterplayInterrupt = counterplay.method;
+      e = resolveEnemyRhythmAction(e, { intent: "heavy", defended: false, ccInterrupted: true }).enemy;
       if (counterplay.method === "damage") addLog("💥 大技を火力で中断！", "gold");
       else addLog(`❄️ 大技を${counterplay.ccType === "stun" ? "気絶" : "凍結"}で中断！`, "gold");
       SFX.crit();
@@ -2218,9 +2229,12 @@ export default function HackRoguelike() {
       p = { ...p, barrier: (p.barrier || 0) + shield };
       addLog(`${s.icon}${s.name}！障壁+${shield}(現在${p.barrier})`, "heal");
     }
+    const rhythmCategory = spec.status ? "status" : ["heal", "shield"].includes(spec.kind) ? "heal" : ["guard", "parry"].includes(spec.kind) ? "defend" : "skill";
+    if (e.hp > 0) e = resolvePlayerRhythmAction(e, rhythmCategory).enemy;
     const counterplay = e.hp > 0 ? resolveHeavyCounterplay({ enemyBefore: counterplayEnemyBefore, enemyAfter: e, directDamage }) : { interrupted: false };
     if (counterplay.interrupted) {
       e.heavyCounterplayInterrupt = counterplay.method;
+      e = resolveEnemyRhythmAction(e, { intent: "heavy", defended: false, ccInterrupted: true }).enemy;
       addLog("💥 大技を火力で中断！", "gold");
       SFX.crit();
     }
@@ -2277,6 +2291,7 @@ export default function HackRoguelike() {
     SFX.defend();
     addLog(`🛡️ 防御の構えを取った(このターン被ダメ${stats.betterDefend > 0 ? "-80%" : "-60%"}・次のターン与ダメ+15%)`, "info");
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
+    e = resolvePlayerRhythmAction(e, "defend").enemy;
     if (isHeavyCounterplayEnemy(e)) delete e.counterplayOutcome;
     // 防御時凍結(氷の心臓・霜纏い)
     const freezeCh = (stats.onDefendFreezeCh || 0) + (player.cls === "mage" && player.variant === "b" ? 35 : 0);
@@ -2362,6 +2377,7 @@ export default function HackRoguelike() {
       pushPlayerPopups([{ dmg: heal }], "heal");
       return;
     }
+    e = resolvePlayerRhythmAction(e, "heal").enemy;
     addLog(`回復薬を飲んだ (+${heal} HP${cured ? "・毒も治った" : ""})${saved ? "♻️ 消費しなかった！" : ""}`, "heal");
     if (e.guardTurns > 0) e.guardTurns--;
     tickCds();
@@ -2692,6 +2708,7 @@ export default function HackRoguelike() {
           <label style={{ fontSize: 12 }}>Seed<input type="number" value={sandboxConfig.seed} onChange={event => update("seed", event.target.value)} style={field} /></label>
           <label style={{ fontSize: 12 }}>行動段階<input type="number" min="0" value={sandboxConfig.patternIdx} onChange={event => update("patternIdx", event.target.value)} style={field} /></label>
           <label style={{ fontSize: 12 }}>予告<select data-testid="sandbox-intent" value={sandboxConfig.intent} onChange={event => update("intent", event.target.value)} style={field}>{Object.entries(INTENTS).map(([key, value]) => <option key={key} value={key}>{value.icon}{value.name}</option>)}</select></label>
+          <label style={{ fontSize: 12 }}>戦闘リズム状態<select data-testid="sandbox-rhythm-phase" value={sandboxConfig.rhythmPhase} onChange={event => update("rhythmPhase", event.target.value)} style={field}><option value="default">初期状態</option><option value="parry-ready">処刑人:受け流し準備</option><option value="exposed">処刑人:装甲崩壊</option><option value="flying">古竜:飛翔</option><option value="breath">古竜:ブレス直前</option><option value="overheated">古竜:過熱</option><option value="barrier">結晶:障壁</option><option value="crystal-exposed">結晶:障壁崩壊</option></select></label>
         </div>
         <button data-testid="sandbox-start" onClick={() => startSandboxCombat()} style={{ ...btnStyle(false, "#0e7490"), width: "100%", marginTop: 16 }}>この条件で戦闘開始</button>
         <button data-testid="sandbox-exit" onClick={leaveSandbox} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>タイトルへ戻る</button>
@@ -3516,6 +3533,18 @@ export default function HackRoguelike() {
               🛡️ 大技を防御すると次の攻撃行動全体+30%　💥 1行動の直接ダメージ合計が敵最大HPの20%以上　❄️ 新規・延長の気絶/凍結で中断
             </div>
           )}
+          {rhythmFor(enemy) && (() => {
+            const rhythm = rhythmFor(enemy);
+            const state = enemy.rhythmState || {};
+            const exposed = state.phase === "exposed" || state.phase === "overheated";
+            const label = rhythm.key === "executioner" ? (state.phase === "exposed" ? "🎯 装甲崩壊" : state.parryReady ? "🛡️ 受け流し準備" : "🪓 装甲防御") : rhythm.key === "dragon" ? (state.phase === "flying" ? "🐉 飛翔" : state.phase === "breath" ? "🔥 次:ブレス" : "♨️ 過熱") : state.phase === "exposed" ? "💥 障壁崩壊" : "💎 共鳴障壁";
+            const remaining = rhythm.key === "dragon" ? `${state.actionsLeft ?? 0}行動` : rhythm.key === "crystal" ? `${state.categories?.length || 0}/3カテゴリ` : state.parryReady ? "処刑防御で崩壊" : "防御で準備";
+            const valid = rhythm.key === "crystal" ? ["attack", "skill", "defend", "status", "heal"].filter(category => category !== state.lastCategory).join(" / ") : rhythm.key === "dragon" && state.phase === "flying" ? "防御 / 回復 / バフ / 状態異常" : rhythm.key === "executioner" && state.phase !== "exposed" ? "防御 → 処刑防御 / CC" : "高火力";
+            return <div data-testid="combat-rhythm" style={{ marginTop: 6, padding: 7, borderRadius: 7, border: `1px solid ${exposed ? "#fbbf24" : "#60a5fa"}`, background: exposed ? "#422006" : "#0c1b33", boxShadow: exposed ? "0 0 14px rgba(251,191,36,.35)" : "none" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800 }}><span>{label}</span><span>{remaining}</span><span>直接×{previewPlayerAction(enemy, "attack").multiplier.toFixed(2)}</span></div>
+              <div style={{ fontSize: 10, color: "#a8a29e", marginTop: 3 }}>有効: {valid}</div>
+            </div>;
+          })()}
           {enemy.guardTurns > 0 && <div style={{ fontSize: 11, color: "#60a5fa", marginTop: 4 }}>🛡️ 構え中(受けるダメージ-50%)</div>}
           {enemy.status && Object.entries(enemy.status).some(([, v]) => v.turns > 0) && (
             <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 6, flexWrap: "wrap" }}>
@@ -3571,9 +3600,9 @@ export default function HackRoguelike() {
 
       {/* 操作 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={btnStyle(false)}>⚔️ 攻撃</button>
-        <button onClick={useDefend} disabled={stats.noDefend > 0 || player.petrified} style={btnStyle(stats.noDefend > 0 || player.petrified, "#1e40af")}>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</button>
-        <button data-testid="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={btnStyle(player.potions <= 0 || player.petrified, "#166534")}>
+        <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={{ ...btnStyle(false), opacity: previewPlayerAction(enemy, "attack").effective ? 1 : .45 }}>⚔️ 攻撃</button>
+        <button onClick={useDefend} disabled={stats.noDefend > 0 || player.petrified} style={{ ...btnStyle(stats.noDefend > 0 || player.petrified, "#1e40af"), opacity: previewPlayerAction(enemy, "defend").effective ? 1 : .45 }}>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</button>
+        <button data-testid="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={{ ...btnStyle(player.potions <= 0 || player.petrified, "#166534"), opacity: previewPlayerAction(enemy, "heal").effective ? 1 : .45 }}>
           🧪 ×{player.potions}
         </button>
       </div>
@@ -3583,8 +3612,9 @@ export default function HackRoguelike() {
             const s = SKILLS[k];
             const cd = cds[k] || 0;
             const dis = cd > 0 || player.petrified;
+            const category = s.status ? "status" : ["heal", "shield"].includes(s.kind) ? "heal" : ["guard", "parry"].includes(s.kind) ? "defend" : "skill";
             return (
-              <button key={k} onClick={() => castSkill(k)} disabled={dis} style={{ ...btnStyle(dis, "#7c2d12"), fontSize: 13 }}>
+              <button key={k} onClick={() => castSkill(k)} disabled={dis} style={{ ...btnStyle(dis, "#7c2d12"), fontSize: 13, opacity: previewPlayerAction(enemy, category).effective ? 1 : .45 }}>
                 {s.icon} {s.name}{(player.skillMods || {})[k] ? SKILL_MODS[(player.skillMods || {})[k]].icon : ""}{cd > 0 ? ` (${cd})` : ""}
               </button>
             );

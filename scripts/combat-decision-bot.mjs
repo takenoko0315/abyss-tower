@@ -232,6 +232,17 @@ function summarize(results) {
     survival: { defend: hcSurvival("defend"), damage: hcSurvival("damage"), cc: hcSurvival("cc") },
     targetDeaths: results.filter(r => r.result === "dead" && isHeavyCounterplayEnemy(r.lastEnemy)).length,
   };
+  const rhythmMetric = key => sum(x => x.combatRhythm?.[key] || 0);
+  const rhythmActions = Object.fromEntries(["executioner", "dragon", "crystal"].map(enemyKey => [enemyKey,
+    Object.fromEntries(["attack", "defend", "skill", "potion"].map(action => [action, sum(x => x.combatRhythm?.enemyActions?.[enemyKey]?.[action] || 0)])),
+  ]));
+  const combatRhythm = {
+    mitigatedDirect: rhythmMetric("mitigatedDirect"), exposedAttacks: rhythmMetric("exposedAttacks"),
+    skillsHeldBeforeExposure: rhythmMetric("skillsHeldBeforeExposure"), armorBreaksByDefend: rhythmMetric("armorBreaksByDefend"),
+    flyingPrepActions: rhythmMetric("flyingPrepActions"), overheatedSkills: rhythmMetric("overheatedSkills"),
+    crystalCategoryUses: rhythmMetric("crystalCategoryUses"), repeatedCategories: rhythmMetric("repeatedCategories"),
+    enemyActions: rhythmActions,
+  };
   return {
     ...outcome,
     deaths: deaths.length,
@@ -254,6 +265,7 @@ function summarize(results) {
     potionOverhealEstimate: sum(x => x.potionOverhealEstimate),
     ccThreatTurnsSeen: sum(x => x.ccThreatTurnsSeen),
     heavyCounterplay,
+    combatRhythm,
     heavyTelegraphs: heavyCounterplay.telegraphs,
     heavyDefended: heavyCounterplay.defended,
     riposteGained: heavyCounterplay.riposteGained,
@@ -300,6 +312,10 @@ function printComparisonReport(summaries, totalSec, buildSec) {
     ["火力中断/CC中断/無対策", s => `${s.heavyCounterplay.damageInterrupts}/${s.heavyCounterplay.ccInterrupts}/${s.heavyCounterplay.unanswered}`],
     ["対処後の平均生存ターン(防/火/CC)", s => `${s.heavyCounterplay.survival.defend.avg.toFixed(1)}/${s.heavyCounterplay.survival.damage.avg.toFixed(1)}/${s.heavyCounterplay.survival.cc.avg.toFixed(1)}`],
     ["対象敵による死亡数", s => String(s.heavyCounterplay.targetDeaths)],
+    ["軽減中への直接攻撃/露出中攻撃", s => `${s.combatRhythm.mitigatedDirect}/${s.combatRhythm.exposedAttacks}`],
+    ["露出前スキル温存/防御崩し", s => `${s.combatRhythm.skillsHeldBeforeExposure}/${s.combatRhythm.armorBreaksByDefend}`],
+    ["飛翔中準備/過熱中スキル", s => `${s.combatRhythm.flyingPrepActions}/${s.combatRhythm.overheatedSkills}`],
+    ["結晶カテゴリ使用/同カテゴリ連打", s => `${s.combatRhythm.crystalCategoryUses}/${s.combatRhythm.repeatedCategories}`],
   ];
   const policyNames = Object.keys(summaries);
   const colWidth = Math.max(24, ...policyNames.map(p => p.length + 2));

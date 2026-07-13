@@ -74,6 +74,12 @@ function emptyMetrics() {
       damageInterrupts: 0, ccInterrupts: 0, unanswered: 0,
       survival: { defend: { sum: 0, n: 0 }, damage: { sum: 0, n: 0 }, cc: { sum: 0, n: 0 } },
     },
+    combatRhythm: {
+      mitigatedDirect: 0, exposedAttacks: 0, skillsHeldBeforeExposure: 0,
+      armorBreaksByDefend: 0, flyingPrepActions: 0, overheatedSkills: 0,
+      crystalCategoryUses: 0, repeatedCategories: 0,
+      enemyActions: { executioner: {}, dragon: {}, crystal: {} },
+    },
   };
 }
 
@@ -158,6 +164,8 @@ function playOneRun(rngSeed, pairedSeed) {
       const ccPending = telegraphedBig
         && ((d.enemy?.status?.freeze?.turns || 0) > 0 || (d.enemy?.status?.stun?.turns || 0) > 0);
       const hpBefore = d.player.hp;
+      const rhythmKey = d.enemy?.combatRhythm;
+      const rhythmState = d.enemy?.rhythmState || {};
 
       const decision = decide(d);
       const actual = executeCombatDecision(container, decision, d);
@@ -166,6 +174,25 @@ function playOneRun(rngSeed, pairedSeed) {
       metrics.combatTurns++;
       if (targetCombat) targetTurns++;
       metrics.counts[actual]++;
+      if (rhythmKey && metrics.combatRhythm.enemyActions[rhythmKey]) {
+        const dist = metrics.combatRhythm.enemyActions[rhythmKey];
+        dist[actual] = (dist[actual] || 0) + 1;
+        const direct = actual === "attack" || actual === "skill";
+        const reduced = rhythmKey === "executioner" && rhythmState.phase !== "exposed"
+          || rhythmKey === "dragon" && rhythmState.phase === "flying"
+          || rhythmKey === "crystal" && rhythmState.phase !== "exposed" && rhythmState.lastCategory === actual;
+        const exposed = rhythmState.phase === "exposed" || rhythmState.phase === "overheated";
+        if (direct && reduced) metrics.combatRhythm.mitigatedDirect++;
+        if (direct && exposed) metrics.combatRhythm.exposedAttacks++;
+        if (!direct && !exposed && (d.player.skills || []).some(key => (d.cds[key] || 0) === 0)) metrics.combatRhythm.skillsHeldBeforeExposure++;
+        if (rhythmKey === "executioner" && actual === "defend" && rhythmState.parryReady && d.enemy.intent === "heavy") metrics.combatRhythm.armorBreaksByDefend++;
+        if (rhythmKey === "dragon" && rhythmState.phase === "flying" && !direct) metrics.combatRhythm.flyingPrepActions++;
+        if (rhythmKey === "dragon" && rhythmState.phase === "overheated" && actual === "skill") metrics.combatRhythm.overheatedSkills++;
+        if (rhythmKey === "crystal") {
+          metrics.combatRhythm.crystalCategoryUses++;
+          if (rhythmState.lastCategory === actual) metrics.combatRhythm.repeatedCategories++;
+        }
+      }
       if (telegraphedBig) metrics.heavyOrFlurryTelegraphed++;
       if (guarding) metrics.guardTurnsSeen++;
       if (ccPending) metrics.ccThreatTurnsSeen++;

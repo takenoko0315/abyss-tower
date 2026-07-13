@@ -365,7 +365,7 @@ export const ENEMIES = [
   { name: "鉄のゴーレム", icon: "🤖", gimmick: "slow" }, { name: "吸魔蛾", icon: "🦋", gimmick: "spellward" },
   { name: "石化蛇", icon: "🐍", gimmick: "petrify" }, { name: "呪いシャーマン", icon: "🪶", gimmick: "deathcurse" },
   { name: "鏡霊", icon: "🪞", gimmick: "mirrorimg" }, { name: "深海のワーム", icon: "🪱", gimmick: "burrow" },
-  { name: "共鳴クリスタル", icon: "💎", gimmick: "crystalline" }, { name: "影狼", icon: "🐺", gimmick: "elusive" },
+  { name: "共鳴クリスタル", icon: "💎", gimmick: "crystalline", combatRhythm: "crystal" }, { name: "影狼", icon: "🐺", gimmick: "elusive" },
   { name: "腐敗した司祭", icon: "☠️", gimmick: "corrupt" }, { name: "硝子人形", icon: "🎎", gimmick: "fragile" },
 ];
 
@@ -379,10 +379,10 @@ export const BOSS_POOLS = [
   [ // 10F
     { name: "死霊騎士", icon: "⚔️", pattern: ["guard", "attack", "heavy"], gimmick: "undying" },
     { name: "ミノタウロス", icon: "🐂", pattern: ["roar", "attack", "heavy"], gimmick: "rage" },
-    { name: "鉄の処刑人", icon: "🪓", pattern: ["attack", "attack", "heavy"], gimmick: null, counterplay: "heavy-v1" },
+    { name: "鉄の処刑人", icon: "🪓", pattern: ["attack", "attack", "heavy"], gimmick: null, counterplay: "heavy-v1", combatRhythm: "executioner" },
   ],
   [ // 15F
-    { name: "古竜", icon: "🐉", pattern: ["roar", "heavy", "attack", "heavy"], gimmick: "stoneskin" },
+    { name: "古竜", icon: "🐉", pattern: ["roar", "heavy", "attack", "heavy"], gimmick: "stoneskin", combatRhythm: "dragon" },
     { name: "双頭の獣", icon: "🐺", pattern: ["attack", "attack", "heavy"], gimmick: "split" },
     { name: "千眼の怪", icon: "👁️", pattern: ["attack", "heavy", "venom", "attack", "heavy"], gimmick: "arcane" },
   ],
