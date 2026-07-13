@@ -8,7 +8,7 @@ import { clickByText } from "./lib/dom-actions.mjs";
 import { nonCombatAction } from "./lib/standard-scene-actions.mjs";
 import { POLICIES, decisionCandidates, isBigThreat } from "./lib/combat-policies.mjs";
 import { installSeededRandom, rerollSeed } from "./lib/seeded-rng.mjs";
-import { HEAVY_COUNTERPLAY } from "../src/game/heavyCounterplay.js";
+import { isHeavyCounterplayEnemy } from "../src/game/heavyCounterplay.js";
 
 const args = Object.fromEntries(
   process.argv.slice(2).map(a => {
@@ -106,7 +106,7 @@ function playOneRun(rngSeed, pairedSeed) {
   let pendingResponses = [];
   let observedCounterplay = {};
   const syncCounterplayCounts = currentEnemy => {
-    if (currentEnemy?.name !== HEAVY_COUNTERPLAY.enemyName) return;
+    if (!isHeavyCounterplayEnemy(currentEnemy)) return;
     const counts = currentEnemy.counterplayCounts || {};
     for (const key of ["riposteGained", "riposteConsumed", "damageInterrupts", "ccInterrupts", "unanswered"]) {
       const delta = Math.max(0, (counts[key] || 0) - (observedCounterplay[key] || 0));
@@ -134,10 +134,10 @@ function playOneRun(rngSeed, pairedSeed) {
       const d = dbg();
       if (!d) throw new Error("window.__abyssDebugが未初期化(初回レンダリング未完了)");
       syncCounterplayCounts(d.enemy);
-      const targetCombat = d.scene === "combat" && d.enemy?.name === HEAVY_COUNTERPLAY.enemyName;
+      const targetCombat = d.scene === "combat" && isHeavyCounterplayEnemy(d.enemy);
       if (trackingTarget && !targetCombat) finishTargetBattle();
       if (targetCombat) trackingTarget = true;
-      if (d.scene === "combat" && d.enemy) lastEnemy = { name: d.enemy.name, gimmick: d.enemy.gimmick, floor: d.floor };
+      if (d.scene === "combat" && d.enemy) lastEnemy = { name: d.enemy.name, counterplay: d.enemy.counterplay, gimmick: d.enemy.gimmick, floor: d.floor };
       if (d.scene === "dead") return { result: "dead", floor: d.floor, cls: d.player.cls, blessing: d.player.blessing, lastEnemy, actions, seed: pairedSeed, rngSeed, metrics };
       if (d.scene === "victory") return { result: "victory", floor: 20, cls: d.player.cls, blessing: d.player.blessing, lastEnemy, actions, seed: pairedSeed, rngSeed, metrics };
 

@@ -1,11 +1,16 @@
 export const HEAVY_COUNTERPLAY = Object.freeze({
+  key: "heavy-v1",
   enemyName: "鉄の処刑人",
   damageThreshold: 0.2,
   riposteBonus: 0.3,
 });
 
+export function isHeavyCounterplayEnemy(enemy) {
+  return enemy?.counterplay === HEAVY_COUNTERPLAY.key;
+}
+
 export function isHeavyCounterplay(enemy) {
-  return enemy?.name === HEAVY_COUNTERPLAY.enemyName && enemy?.intent === "heavy";
+  return isHeavyCounterplayEnemy(enemy) && enemy?.intent === "heavy";
 }
 
 const safeDamage = (value) => Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -23,6 +28,7 @@ export function newlyAppliedOrExtendedCc(beforeStatus, afterStatus) {
 
 export function resolveHeavyCounterplay({ enemyBefore, enemyAfter, directDamage = 0 }) {
   if (!isHeavyCounterplay(enemyBefore)) return { interrupted: false, method: null };
+  if (Number.isFinite(enemyAfter?.hp) && enemyAfter.hp <= 0) return { interrupted: false, method: null, defeated: true };
   const ccType = newlyAppliedOrExtendedCc(enemyBefore?.status, enemyAfter?.status);
   if (ccType) return { interrupted: true, method: "cc", ccType };
   const maxHp = Number.isFinite(enemyBefore?.maxHp) ? enemyBefore.maxHp : 0;
@@ -44,4 +50,8 @@ export function consumeRiposte(player) {
 
 export function grantRiposte(player) {
   return { ...player, heavyRiposte: true };
+}
+
+export function clearRiposte(player) {
+  return player?.heavyRiposte ? { ...player, heavyRiposte: false } : { ...player };
 }

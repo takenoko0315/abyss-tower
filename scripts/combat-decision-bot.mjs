@@ -12,7 +12,7 @@ import fs from "node:fs";
 import * as esbuild from "esbuild";
 import { BLESSINGS, CLASSES, DIFFICULTIES } from "../src/game/data.js";
 import { pairComparison, summarizeOutcomes } from "./lib/combat-stats.mjs";
-import { HEAVY_COUNTERPLAY } from "../src/game/heavyCounterplay.js";
+import { HEAVY_COUNTERPLAY, isHeavyCounterplayEnemy } from "../src/game/heavyCounterplay.js";
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CACHE_DIR = path.join(PROJECT_ROOT, "node_modules", ".combat-decision-bot-cache");
@@ -230,7 +230,7 @@ function summarize(results) {
     ccInterrupts: hcSum("ccInterrupts"),
     unanswered: hcSum("unanswered"),
     survival: { defend: hcSurvival("defend"), damage: hcSurvival("damage"), cc: hcSurvival("cc") },
-    targetDeaths: results.filter(r => r.result === "dead" && r.lastEnemy?.name === HEAVY_COUNTERPLAY.enemyName).length,
+    targetDeaths: results.filter(r => r.result === "dead" && isHeavyCounterplayEnemy(r.lastEnemy)).length,
   };
   return {
     ...outcome,

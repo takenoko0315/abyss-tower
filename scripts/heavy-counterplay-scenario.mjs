@@ -45,7 +45,7 @@ for (const scenario of scenarios) {
     const s = summaries[scenario][policy];
     const choiceTotal = Object.values(s.choices).reduce((sum, value) => sum + value, 0);
     const choiceText = choiceTotal ? Object.entries(s.choices).map(([key, value]) => `${key}:${(value / choiceTotal * 100).toFixed(1)}%`).join(" ") : "-";
-    console.log(`${policy.padEnd(16)} 勝率${(s.winRate * 100).toFixed(1)}% HP ${s.endHp.mean.toFixed(1)}/${s.endHp.median.toFixed(1)} 被ダメ ${s.damageTaken.mean.toFixed(1)}/${s.damageTaken.median.toFixed(1)} Turn ${s.turns.mean.toFixed(1)}/${s.turns.median.toFixed(1)} 大技予告/発動${s.heavyTelegraphs}/${s.heavyExecuted} 防御${s.defended} 反撃${s.riposteGained}/${s.riposteConsumed} 火力中断${s.damageInterrupts}/${s.damageAttempts} CC中断${s.ccInterrupts}/${s.ccAttempts} CC可${s.ccAvailable} skill${s.skills} potion${s.potions} strategic[${choiceText}]`);
+    console.log(`${policy.padEnd(16)} 勝率${(s.winRate * 100).toFixed(1)}% HP ${s.endHp.mean.toFixed(1)}/${s.endHp.median.toFixed(1)} 被ダメ ${s.damageTaken.mean.toFixed(1)}/${s.damageTaken.median.toFixed(1)} Turn ${s.turns.mean.toFixed(1)}/${s.turns.median.toFixed(1)} 大技予告/発動${s.heavyTelegraphs}/${s.heavyExecuted} 防御${s.defended} 反撃${s.riposteGained}/${s.riposteConsumed} 火力中断/撃破${s.damageInterrupts}/${s.damageKills}/${s.damageAttempts} CC中断/撃破${s.ccInterrupts}/${s.ccKills}/${s.ccAttempts} CC可${s.ccAvailable} skill${s.skills} potion${s.potions} strategic[${choiceText}]`);
   }
 }
 

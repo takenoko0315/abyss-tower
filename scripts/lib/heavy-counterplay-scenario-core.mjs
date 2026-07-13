@@ -11,7 +11,7 @@ const basePlayer = {
   potions: 1, skills: [], cds: {}, statusApplyChance: 1, equipment: {}, hooks: {}, heavyRiposte: false,
 };
 const baseEnemy = {
-  name: HEAVY_COUNTERPLAY.enemyName, hp: 200, maxHp: 200, atk: 34, def: 0,
+  name: HEAVY_COUNTERPLAY.enemyName, counterplay: HEAVY_COUNTERPLAY.key, hp: 200, maxHp: 200, atk: 34, def: 0,
   intent: "heavy", pattern: ["attack", "attack", "heavy"], patternIdx: 0, status: {}, ccResist: 0,
 };
 
@@ -139,7 +139,7 @@ export function runScenarioFight(config, policy, seed) {
   const metrics = {
     turns: 0, damageTaken: 0, heavyTelegraphs: 0, heavyExecuted: 0, defended: 0, riposteGained: 0, riposteConsumed: 0,
     damageAttempts: 0, damageInterrupts: 0, ccAttempts: 0, ccInterrupts: 0, potions: 0, skills: 0,
-    ccAvailable: 0, strategicChoices: [], predictionErrors: [], maxHitsInAction: 0,
+    heavyKills: 0, damageKills: 0, ccKills: 0, ccAvailable: 0, strategicChoices: [], predictionErrors: [], maxHitsInAction: 0,
   };
 
   while (player.hp > 0 && enemy.hp > 0 && metrics.turns < 100) {
@@ -182,7 +182,14 @@ export function runScenarioFight(config, policy, seed) {
         if (!interrupted) { interrupted = true; advanceIntent = false; }
         enemy.status[ccType].turns = Math.max(0, enemy.status[ccType].turns - 1);
       }
-      if (enemy.hp <= 0) break;
+      if (enemy.hp <= 0) {
+        if (heavy) {
+          metrics.heavyKills++;
+          if (selectedCc) metrics.ccKills++;
+          else metrics.damageKills++;
+        }
+        break;
+      }
       if (!interrupted) {
         if (heavy) metrics.heavyExecuted++;
         const raw = enemy.intent === "heavy" ? enemy.atk * 1.8 : enemy.atk;
@@ -226,8 +233,11 @@ export function summarizeScenario(results) {
     turns: { mean: average(values("turns")), median: median(values("turns")) },
     heavyTelegraphs: sum("heavyTelegraphs"), heavyExecuted: sum("heavyExecuted"), defended: sum("defended"), riposteGained: sum("riposteGained"), riposteConsumed: sum("riposteConsumed"),
     damageAttempts: sum("damageAttempts"), damageInterrupts: sum("damageInterrupts"), ccAttempts: sum("ccAttempts"), ccInterrupts: sum("ccInterrupts"),
+    heavyKills: sum("heavyKills"), damageKills: sum("damageKills"), ccKills: sum("ccKills"),
     damageInterruptRate: sum("damageAttempts") ? sum("damageInterrupts") / sum("damageAttempts") : 0,
     ccInterruptRate: sum("ccAttempts") ? sum("ccInterrupts") / sum("ccAttempts") : 0,
+    damagePreventRate: sum("damageAttempts") ? (sum("damageInterrupts") + sum("damageKills")) / sum("damageAttempts") : 0,
+    ccPreventRate: sum("ccAttempts") ? (sum("ccInterrupts") + sum("ccKills")) / sum("ccAttempts") : 0,
     potions: sum("potions"), skills: sum("skills"), ccAvailable: sum("ccAvailable"), choices,
     predictionError: { mean: average(results.flatMap(result => result.predictionErrors)), median: median(results.flatMap(result => result.predictionErrors)) },
     maxHitsInAction: Math.max(...values("maxHitsInAction"), 0),

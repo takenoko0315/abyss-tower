@@ -18,7 +18,7 @@ async function patchTarget(page, intent = "heavy") {
   await page.evaluate(nextIntent => {
     window.__abyssE2E.patchPlayer({ hp: 100, atk: 10, def: 100, crit: 0, double: 0, defendedLast: false, heavyRiposte: false });
     window.__abyssE2E.patchEnemy({
-      name: "鉄の処刑人", hp: 1000, maxHp: 1000, atk: 10, trait: null, gimmick: null,
+      name: "鉄の処刑人", counterplay: "heavy-v1", hp: 1000, maxHp: 1000, atk: 10, trait: null, gimmick: null,
       guardTurns: 0, status: {}, intent: nextIntent, pattern: ["attack"], patternIdx: 0, isBoss: true,
     });
   }, intent);
@@ -26,6 +26,7 @@ async function patchTarget(page, intent = "heavy") {
 }
 
 test("鉄の処刑人: 大技防御だけが反撃態勢を付与し、次の直接攻撃1回で消費する", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
   await prepare(page);
   await patchTarget(page, "attack");
   const baselineMultiplier = 1;
@@ -35,6 +36,7 @@ test("鉄の処刑人: 大技防御だけが反撃態勢を付与し、次の直
 
   await patchTarget(page, "heavy");
   await expect(page.getByTestId("heavy-counterplay-hint")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByRole("button", { name: /防御/ }).click();
   await expect.poll(async () => (await state(page)).player.heavyRiposte).toBe(true);
   expect((await state(page)).enemy.counterplayOutcome).toBe("defend");
@@ -56,4 +58,31 @@ test("鉄の処刑人: 1行動で最大HP20%以上の直接ダメージを与え
   await expect.poll(async () => (await state(page)).enemy.counterplayOutcome).toBe("damage");
   expect((await state(page)).enemy.intent).toBe("attack");
   expect((await state(page)).player.hp).toBe(hpBefore);
+});
+
+test("鉄の処刑人: 構えスキルの即時直接ダメージも火力中断へ含める", async ({ page }) => {
+  await prepare(page);
+  await patchTarget(page, "heavy");
+  await page.evaluate(() => window.__abyssE2E.patchPlayer({ atk: 300, skills: ["ironguard"] }));
+  const hpBefore = (await state(page)).player.hp;
+  await page.getByRole("button", { name: /鉄壁の構え/ }).click();
+  await expect.poll(async () => (await state(page)).enemy.counterplayOutcome).toBe("damage");
+  expect((await state(page)).player.hp).toBe(hpBefore);
+  expect((await state(page)).player.heavyRiposte).toBeFalsy();
+});
+
+test("他のボス: 同じ大技・同じ火力でも中断せず従来どおり攻撃する", async ({ page }) => {
+  await prepare(page);
+  await page.evaluate(() => {
+    window.__abyssE2E.patchPlayer({ hp: 100, atk: 250, def: 100, crit: 0, double: 0 });
+    window.__abyssE2E.patchEnemy({
+      name: "古竜", counterplay: null, hp: 1000, maxHp: 1000, atk: 10, trait: null, gimmick: "stoneskin",
+      guardTurns: 0, status: {}, intent: "heavy", pattern: ["attack"], patternIdx: 0, isBoss: true,
+    });
+  });
+  await expect(page.getByTestId("heavy-counterplay-hint")).toHaveCount(0);
+  const hpBefore = (await state(page)).player.hp;
+  await page.getByTestId("attack-button").click();
+  await expect.poll(async () => (await state(page)).player.hp).toBeLessThan(hpBefore);
+  expect((await state(page)).enemy.counterplayOutcome).toBeUndefined();
 });

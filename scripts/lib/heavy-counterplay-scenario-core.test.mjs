@@ -31,6 +31,15 @@ describe("heavy counterplay scenario", () => {
     expect(result.ccInterrupts).toBe(0);
   });
 
+  it("大技中の撃破を中断成功と重複計上せず、撃破による阻止へ分ける", () => {
+    const config = structuredClone(SCENARIOS.B[0]);
+    config.enemy.hp = 20;
+    const result = runScenarioFight(config, "damage-priority", 40);
+    expect(result.damageInterrupts).toBe(0);
+    expect(result.damageKills).toBe(1);
+    expect(result.heavyKills).toBe(1);
+  });
+
   it("Dではstrategicが初期状態に応じてCC・火力・防御を使い分ける", () => {
     const results = runScenarioSet({ scenario: "D", policy: "strategic", runs: 3, seed: 10, workers: 1 });
     const firstChoices = results.map(result => result.strategicChoices[0].action === "skill" ? "cc" : result.strategicChoices[0].action);

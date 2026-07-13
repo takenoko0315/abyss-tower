@@ -156,16 +156,25 @@ describe("basicPolicy", () => {
 
 describe("strategicPolicy", () => {
   it("鉄の処刑人の大技には確定CC、20%火力、防御の順で対処する", () => {
-    const target = { name: "鉄の処刑人", intent: "heavy", hp: 100, maxHp: 100, guardTurns: 0, status: {} };
+    const target = { name: "鉄の処刑人", counterplay: "heavy-v1", intent: "heavy", hp: 100, maxHp: 100, guardTurns: 0, status: {} };
     expect(strategicPolicy(makeState({ skills: ["frostnova"], enemy: target }))).toEqual({ action: "skill", skillKey: "frostnova" });
     expect(strategicPolicy(makeState({ atk: 25, skills: [], enemy: target }))).toEqual({ action: "attack" });
     expect(strategicPolicy(makeState({ atk: 10, skills: [], enemy: target }))).toEqual({ action: "defend" });
   });
 
   it("鉄の処刑人戦で防御・スキル禁止でも通常攻撃へフォールバックする", () => {
-    const target = { name: "鉄の処刑人", intent: "heavy", hp: 100, maxHp: 100, guardTurns: 0, status: {} };
+    const target = { name: "鉄の処刑人", counterplay: "heavy-v1", intent: "heavy", hp: 100, maxHp: 100, guardTurns: 0, status: {} };
     const state = makeState({ atk: 10, skills: ["frostnova"], enemy: target, noDefend: 1, noSkill: 1 });
     expect(strategicPolicy(state)).toEqual({ action: "attack" });
+  });
+
+  it("火力予測は最低乱数を使い、確率要素を見込まず確定連撃だけを合算する", () => {
+    const target = { name: "鉄の処刑人", counterplay: "heavy-v1", intent: "heavy", hp: 100, maxHp: 100, guardTurns: 0, status: {} };
+    expect(strategicPolicy(makeState({ atk: 20, skills: [], enemy: target }))).toEqual({ action: "defend" });
+    expect(strategicPolicy(makeState({ atk: 21, skills: [], enemy: target }))).toEqual({ action: "attack" });
+    const guaranteedDouble = makeState({ atk: 11, skills: [], enemy: target });
+    guaranteedDouble.stats.double = 100;
+    expect(strategicPolicy(guaranteedDouble)).toEqual({ action: "attack" });
   });
   it("HP25%以下で回復スキルがあれば回復薬より優先する", () => {
     const state = makeState({
