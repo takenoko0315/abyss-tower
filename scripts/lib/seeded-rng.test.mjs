@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mulberry32, installSeededRandom } from "./seeded-rng.mjs";
+import { mulberry32, installSeededRandom, rerollSeed } from "./seeded-rng.mjs";
 
 describe("mulberry32", () => {
   it("同じシードなら同じ数列を返す", () => {
@@ -40,5 +40,21 @@ describe("installSeededRandom", () => {
     const restore2 = installSeededRandom(42);
     expect(Math.random()).toBe(first);
     restore2();
+  });
+});
+
+describe("rerollSeed", () => {
+  it("worker分割に依存せず論理seedごとの候補列が重複しない", () => {
+    const runs = 6;
+    const candidates = [];
+    for (let logicalSeed = 100; logicalSeed < 100 + runs; logicalSeed++) {
+      for (let attempt = 0; attempt < 3; attempt++) candidates.push(rerollSeed(logicalSeed, attempt, runs));
+    }
+    expect(new Set(candidates).size).toBe(candidates.length);
+    expect(rerollSeed(102, 2, runs)).toBe(114);
+  });
+
+  it("不正なstrideを拒否する", () => {
+    expect(() => rerollSeed(1, 0, 0)).toThrow(/整数/);
   });
 });

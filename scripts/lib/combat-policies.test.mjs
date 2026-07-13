@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attackOnlyPolicy, greedyPolicy, basicPolicy, strategicPolicy } from "./combat-policies.mjs";
+import { attackOnlyPolicy, greedyPolicy, basicPolicy, strategicPolicy, decisionCandidates } from "./combat-policies.mjs";
 
 // テスト用の最小限の状態を組み立てるヘルパー
 function makeState({
@@ -23,6 +23,31 @@ describe("attackOnlyPolicy", () => {
   it("敵が大技を予告していても防御しない", () => {
     const state = makeState({ enemy: { intent: "heavy", hp: 50, maxHp: 100, guardTurns: 0, status: {} } });
     expect(attackOnlyPolicy(state)).toEqual({ action: "attack" });
+  });
+});
+
+describe("decisionCandidates", () => {
+  it("通常攻撃不能時にも利用可能な行動へ決定的にフォールバックできる", () => {
+    const state = makeState({ hp: 20, potions: 1, skills: ["strike"], cds: { strike: 0 } });
+    expect(decisionCandidates({ action: "attack" }, state)).toEqual([
+      { action: "attack" },
+      { action: "defend" },
+      { action: "potion" },
+      { action: "skill", skillKey: "strike" },
+    ]);
+  });
+
+  it("禁止・一時利用不能な行動をフォールバック候補に入れない", () => {
+    const state = makeState({ hp: 20, potions: 0, skills: ["strike"], cds: { strike: 2 }, noDefend: 1, noSkill: 1 });
+    expect(decisionCandidates({ action: "skill", skillKey: "strike" }, state)).toEqual([
+      { action: "skill", skillKey: "strike" },
+      { action: "attack" },
+    ]);
+  });
+
+  it("石化中は解除手段となる通常攻撃以外を追加しない", () => {
+    const state = makeState({ petrified: true, potions: 3, skills: ["strike"] });
+    expect(decisionCandidates({ action: "attack" }, state)).toEqual([{ action: "attack" }]);
   });
 });
 

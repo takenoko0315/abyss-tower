@@ -146,5 +146,24 @@ export const POLICIES = {
   strategic: strategicPolicy,
 };
 
+// 方針の第一選択がDOM上で使えない場合に試す、決定的な合法行動列。
+// 第一選択を先頭に保ち、通常攻撃→防御→回復→所持スキルの順で重複なく並べる。
+export function decisionCandidates(decision, d) {
+  const { player, stats, cds } = d;
+  const candidates = [decision, { action: "attack" }];
+  if (!player.petrified && (stats.noDefend || 0) <= 0) candidates.push({ action: "defend" });
+  if (!player.petrified && player.potions > 0) candidates.push({ action: "potion" });
+  for (const key of player.skills || []) {
+    if (isSkillUsable(player, cds, stats, key)) candidates.push({ action: "skill", skillKey: key });
+  }
+  const seen = new Set();
+  return candidates.filter(candidate => {
+    const id = `${candidate.action}:${candidate.skillKey || ""}`;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
 // 計測(combat-decision-worker-core.mjs)用に分類集合とヘルパーも公開する
 export { DAMAGE_SKILLS, CC_SKILLS, STANCE_SKILLS, HEAL_SKILLS, isSkillUsable, usableSkillsOfKind, pickBestDamageSkill, isBigThreat };

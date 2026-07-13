@@ -10,6 +10,8 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import * as esbuild from "esbuild";
+import { BLESSINGS, CLASSES, DIFFICULTIES } from "../src/game/data.js";
+import { pairComparison, summarizeOutcomes } from "./lib/combat-stats.mjs";
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CACHE_DIR = path.join(PROJECT_ROOT, "node_modules", ".combat-decision-bot-cache");
@@ -28,17 +30,38 @@ const CLASS_FILTER = args.class || null;
 const BLESSING_FILTER = args.blessing || null;
 const BASE_SEED = parseInt(args.seed || "1", 10);
 const POLICIES = (args.policies || "attack-only,greedy,basic,strategic").split(",").map(s => s.trim()).filter(Boolean);
+const VALID_POLICIES = new Set(["attack-only", "greedy", "basic", "strategic"]);
 // ペア比較の対象。既定はPOLICIES内で隣り合う組(=一段階だけ判断を高度にした差分)
 const PAIRS = args.pairs
   ? args.pairs.split(",").map(s => s.trim().split(":")).filter(([a, b]) => a && b)
   : POLICIES.slice(1).map((p, i) => [POLICIES[i], p]);
 const OUT_PREFIX = args.out || path.join(PROJECT_ROOT, "scripts", "out", `combat-decision-${new Date().toISOString().replace(/[:.]/g, "-")}`);
 
+validateCliArgs();
+
 const KEYSTONE_NAMES = {
   ks_thorn: "茨の誓約", ks_blood: "血の渇望", ks_giant: "鈍重な巨人", ks_glass: "硝子の魂",
   ks_silence: "無音の誓い", ks_leaden: "鉛の鎧", ks_bloodbowl: "血染めの杯", ks_chaos: "深淵の賽",
   ks_frenzy: "狂血の契約", ks_collector: "収集家の契約", ks_catalyst: "錬金の契約",
 };
+
+function validateCliArgs() {
+  if (!Number.isInteger(RUNS) || RUNS < 1) throw new Error(`--runsは1以上の整数で指定してください: ${args.runs}`);
+  if (!Number.isInteger(WORKERS) || WORKERS < 1) throw new Error(`--workersは1以上の整数で指定してください: ${args.workers}`);
+  if (!Number.isInteger(BASE_SEED)) throw new Error(`--seedは整数で指定してください: ${args.seed}`);
+  if (!POLICIES.length || POLICIES.some(policy => !VALID_POLICIES.has(policy))) {
+    throw new Error(`未知の行動方針: ${POLICIES.filter(policy => !VALID_POLICIES.has(policy)).join(",") || "(空)"}`);
+  }
+  if (new Set(POLICIES).size !== POLICIES.length) throw new Error(`--policiesに重複があります: ${args.policies}`);
+  if (!Object.values(DIFFICULTIES).some(diff => diff.name === DIFF_NAME)) throw new Error(`未知の難易度: ${DIFF_NAME}`);
+  if (CLASS_FILTER && !CLASSES[CLASS_FILTER]) throw new Error(`未知のクラス: ${CLASS_FILTER}`);
+  if (BLESSING_FILTER && BLESSING_FILTER !== "none" && !BLESSINGS.some(blessing => blessing.key === BLESSING_FILTER)) {
+    throw new Error(`未知の祝福/契約: ${BLESSING_FILTER}`);
+  }
+  for (const [a, b] of PAIRS) {
+    if (!POLICIES.includes(a) || !POLICIES.includes(b)) throw new Error(`--pairsの方針が--policiesにありません: ${a}:${b}`);
+  }
+}
 
 await main();
 
@@ -125,7 +148,7 @@ async function runPolicy(policy) {
 
 function spawnWorker(runs, policy, seedOffset) {
   return new Promise((resolve, reject) => {
-    const extraArgs = [`--policy=${policy}`, `--seedOffset=${seedOffset}`];
+    const extraArgs = [`--policy=${policy}`, `--seedOffset=${seedOffset}`, `--seedStride=${RUNS}`];
     if (CLASS_FILTER) extraArgs.push(`--class=${CLASS_FILTER}`);
     if (BLESSING_FILTER) extraArgs.push(`--blessing=${BLESSING_FILTER}`);
     const child = spawn(
@@ -149,21 +172,14 @@ function spawnWorker(runs, policy, seedOffset) {
 }
 
 // ===== 集計 =====
-function median(nums) {
-  if (!nums.length) return 0;
-  const sorted = [...nums].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
 function keystoneLabel(blessingKey) {
   if (!blessingKey) return "(不明)";
   return KEYSTONE_NAMES[blessingKey] || "契約なし";
 }
 
 function summarize(results) {
-  const n = results.length;
-  const floors = results.map(r => r.floor || 0);
-  const clears = results.filter(r => r.result === "victory");
+  const outcome = summarizeOutcomes(results);
+  const n = outcome.n;
   const deaths = results.filter(r => r.result === "dead");
   const timeouts = results.filter(r => r.result === "timeout");
   const errors = results.filter(r => r.result === "error");
@@ -171,7 +187,7 @@ function summarize(results) {
   const m = results.map(r => r.metrics || {
     combatTurns: 0, counts: { attack: 0, defend: 0, skill: 0, potion: 0 },
     heavyOrFlurryTelegraphed: 0, defendedVsHeavy: 0, guardTurnsSeen: 0, attackedVsGuard: 0,
-    mitigatedDamageEstimate: 0, potionOverhealEstimate: 0, ccInterruptTurns: 0,
+    mitigatedDamageEstimate: 0, potionOverhealEstimate: 0, ccThreatTurnsSeen: 0,
   });
   const sum = (fn) => m.reduce((a, x) => a + fn(x), 0);
 
@@ -198,12 +214,7 @@ function summarize(results) {
   for (const r of results) (byKeystone[keystoneLabel(r.blessing)] ??= []).push(r.floor || 0);
 
   return {
-    n,
-    avgFloor: n ? floors.reduce((a, b) => a + b, 0) / n : 0,
-    medianFloor: median(floors),
-    maxFloor: floors.length ? Math.max(...floors) : 0,
-    clearRate: n ? clears.length / n : 0,
-    clears: clears.length,
+    ...outcome,
     deaths: deaths.length,
     timeouts: timeouts.length,
     errors: errors.length,
@@ -222,38 +233,8 @@ function summarize(results) {
     mitigatedDamageEstimate: sum(x => x.mitigatedDamageEstimate),
     potionUses: totalPotion,
     potionOverhealEstimate: sum(x => x.potionOverhealEstimate),
-    ccInterruptTurns: sum(x => x.ccInterruptTurns),
+    ccThreatTurnsSeen: sum(x => x.ccThreatTurnsSeen),
     errorSamples: errors.slice(0, 5).map(e => ({ floor: e.floor, cls: e.cls, message: e.error?.message })),
-  };
-}
-
-// 同一シードのランどうしを突き合わせ、到達階の差を集計する(全ラン平均だけでは見えない
-// 「どのくらいの割合で上回るか」「差のばらつき」を見るため)。CIは対応のある差の平均に対する
-// 正規近似(母集団の分布形状に依らずCLTにより妥当、n=100〜300程度を想定)。
-function pairComparison(resultsA, resultsB) {
-  const bySeedA = new Map(resultsA.map(r => [r.seed, r]));
-  const bySeedB = new Map(resultsB.map(r => [r.seed, r]));
-  const diffs = [];
-  for (const [seed, a] of bySeedA) {
-    const b = bySeedB.get(seed);
-    if (!b) continue;
-    diffs.push((b.floor || 0) - (a.floor || 0));
-  }
-  const n = diffs.length;
-  if (n === 0) return { n: 0, pairedSeeds: 0 };
-  const wins = diffs.filter(d => d > 0).length;
-  const ties = diffs.filter(d => d === 0).length;
-  const losses = diffs.filter(d => d < 0).length;
-  const mean = diffs.reduce((a, b) => a + b, 0) / n;
-  const med = median(diffs);
-  const variance = n > 1 ? diffs.reduce((a, d) => a + (d - mean) ** 2, 0) / (n - 1) : 0;
-  const sd = Math.sqrt(variance);
-  const stderr = sd / Math.sqrt(n);
-  return {
-    n, wins, ties, losses,
-    winRate: wins / n, tieRate: ties / n, lossRate: losses / n,
-    meanDiff: mean, medianDiff: med, sd,
-    ci95: [mean - 1.96 * stderr, mean + 1.96 * stderr],
   };
 }
 
@@ -277,11 +258,11 @@ function printComparisonReport(summaries, totalSec, buildSec) {
     ["回復回数", s => String(s.actionCounts.potion)],
     ["攻撃以外を選択した割合", s => (s.nonAttackRatio * 100).toFixed(1) + "%"],
     ["大技/連攻に防御した割合", s => `${(s.defendVsHeavyRate * 100).toFixed(1)}% (n=${s.heavyOrFlurryTelegraphed})`],
-    ["敵防御中に攻撃した割合", s => `${(s.attackVsGuardRate * 100).toFixed(1)}% (n=${s.guardTurnsSeen})`],
+    ["敵防御中に通常攻撃した割合", s => `${(s.attackVsGuardRate * 100).toFixed(1)}% (n=${s.guardTurnsSeen})`],
     ["防御の推定軽減ダメージ合計", s => String(s.mitigatedDamageEstimate)],
     ["回復薬使用回数", s => String(s.potionUses)],
     ["回復薬の推定過剰回復合計", s => String(s.potionOverhealEstimate)],
-    ["気絶/凍結による大技足止め回数", s => String(s.ccInterruptTurns)],
+    ["大技/連攻予告中のCC残存ターン数", s => String(s.ccThreatTurnsSeen)],
   ];
   const policyNames = Object.keys(summaries);
   const colWidth = Math.max(24, ...policyNames.map(p => p.length + 2));
@@ -317,7 +298,8 @@ function printPairReport(pairStats) {
     const [a, b] = label.split("_vs_");
     console.log(`[${a} → ${b}] n=${s.n}`);
     console.log(`  上回った割合: ${(s.winRate * 100).toFixed(1)}%  同率: ${(s.tieRate * 100).toFixed(1)}%  下回った割合: ${(s.lossRate * 100).toFixed(1)}%`);
-    console.log(`  平均差: ${s.meanDiff.toFixed(2)}F  中央値差: ${s.medianDiff.toFixed(1)}F  95%CI: [${s.ci95[0].toFixed(2)}, ${s.ci95[1].toFixed(2)}]F`);
+    const ci = s.ci95 ? `[${s.ci95[0].toFixed(2)}, ${s.ci95[1].toFixed(2)}]F` : "算出不可(n<2)";
+    console.log(`  平均差: ${s.meanDiff.toFixed(2)}F  中央値差: ${s.medianDiff.toFixed(1)}F  95%CI: ${ci}`);
   }
   console.log("");
 }
@@ -326,23 +308,34 @@ function writeOutputs(byPolicy, summaries, pairStats) {
   fs.mkdirSync(path.dirname(OUT_PREFIX), { recursive: true });
   const jsonPath = `${OUT_PREFIX}.json`;
   const csvPath = `${OUT_PREFIX}.csv`;
-  fs.writeFileSync(jsonPath, JSON.stringify({
+  const json = JSON.stringify({
     meta: { runs: RUNS, diff: DIFF_NAME, class: CLASS_FILTER, blessing: BLESSING_FILTER, seed: BASE_SEED, policies: Object.keys(summaries) },
     summaries,
     pairStats,
     results: byPolicy,
-  }, null, 2));
+  }, null, 2);
 
   const metricKeys = [
     "n", "avgFloor", "medianFloor", "maxFloor", "clearRate", "deaths", "timeouts", "errors",
     "avgCombatTurns", "nonAttackRatio", "defendVsHeavyRate", "attackVsGuardRate",
-    "mitigatedDamageEstimate", "potionUses", "potionOverhealEstimate", "ccInterruptTurns",
+    "mitigatedDamageEstimate", "potionUses", "potionOverhealEstimate", "ccThreatTurnsSeen",
   ];
   const policyNames = Object.keys(summaries);
   const csvLines = ["metric," + policyNames.join(",")];
   for (const key of metricKeys) {
     csvLines.push([key, ...policyNames.map(p => summaries[p][key])].join(","));
   }
-  fs.writeFileSync(csvPath, csvLines.join("\n") + "\n");
+  writeFileAtomic(jsonPath, json);
+  writeFileAtomic(csvPath, csvLines.join("\n") + "\n");
   console.log(`出力: ${jsonPath}\n出力: ${csvPath}`);
+}
+
+function writeFileAtomic(targetPath, content) {
+  const tempPath = `${targetPath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, content);
+    fs.renameSync(tempPath, targetPath);
+  } finally {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  }
 }

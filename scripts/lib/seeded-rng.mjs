@@ -21,3 +21,11 @@ export function installSeededRandom(seed) {
     Math.random = original;
   };
 }
+
+// 固定契約のリロール候補seed。論理seedを比較キーとして保ち、attemptごとに全体RUNS幅で進める。
+export function rerollSeed(logicalSeed, attempt, stride) {
+  if (!Number.isInteger(logicalSeed) || !Number.isInteger(attempt) || attempt < 0 || !Number.isInteger(stride) || stride < 1) {
+    throw new Error("rerollSeedには整数のlogicalSeed/attempt/strideが必要です");
+  }
+  return logicalSeed + attempt * stride;
+}
