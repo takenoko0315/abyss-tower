@@ -14,6 +14,9 @@ test-results
 playwright-report
 *.local
 
+# combat-decision-bot(scripts/combat-decision-bot.mjs)の生データ出力。要約はdocs/combat-decision-baseline.mdに記載する
+scripts/out/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
