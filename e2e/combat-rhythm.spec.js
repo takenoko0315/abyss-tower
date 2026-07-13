@@ -8,12 +8,18 @@ test.beforeEach(async ({ page }) => {
 
 test("処刑人は防御準備後の処刑防御でのみ装甲崩壊する", async ({ page }) => {
   await page.evaluate(() => window.__abyssE2E.startSandboxCombat({ enemy: "鉄の処刑人", intent: "heavy", rhythmPhase: "default", hp: 100, seed: 7001 }));
-  await expect(page.getByTestId("combat-rhythm")).toContainText("装甲防御");
-  await expect(page.getByTestId("damage-efficiency")).toContainText("敵が受ける直接ダメージ 25%");
+  await expect(page.getByTestId("combat-rhythm")).toHaveCount(0);
   await expect(page.getByTestId("attack-damage-preview")).toContainText("予想");
+  await expect(page.getByTestId("execution-countdown")).toContainText("1");
+  await expect(page.getByTestId("execution-intent")).toContainText("🪓 処刑");
+  const maxHp = await page.evaluate(() => window.__abyssDebug.enemy.maxHp);
+  const threshold = Math.ceil(maxHp * 0.2);
+  await expect(page.getByTestId("execution-threshold")).toHaveText(`1行動で${threshold}以上なら中断`);
+  await expect(page.getByTestId("defend-damage-preview")).toContainText("被ダメ");
   await page.getByRole("button", { name: /防御/ }).click();
   await expect.poll(() => page.evaluate(() => window.__abyssDebug.enemy.rhythmState.phase)).toBe("exposed");
-  await expect(page.getByTestId("combat-rhythm")).toContainText("敵が受けるダメージ 200%");
+  await expect(page.getByTestId("damage-efficiency")).toHaveText("💥 2倍");
+  await expect(page.getByTestId("armor-broken-badge")).toHaveText("①");
   await expect(page.getByTestId("enemy-card")).toHaveCSS("border-top-color", "rgb(251, 191, 36)");
 });
 

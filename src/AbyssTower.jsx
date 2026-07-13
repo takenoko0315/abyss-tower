@@ -22,6 +22,7 @@ import {
   consumeRiposte,
   clearRiposte,
   grantRiposte,
+  HEAVY_COUNTERPLAY,
   isHeavyCounterplay,
   isHeavyCounterplayEnemy,
   resolveHeavyCounterplay,
@@ -777,6 +778,19 @@ export default function HackRoguelike() {
     return null;
   };
 
+  // 敵の現在intentが命中した場合の被ダメ見積もり(行動予告欄・防御ボタン・処刑表示が共有する唯一の計算)
+  const estimateIntentDamage = e => {
+    const it = INTENTS[e?.intent];
+    if (!it) return null;
+    const hitsEst = e.intent === "flurry" ? 3 : e.trait === "swift" && e.intent === "attack" ? 2 : 1;
+    const gimmickMult = (e.gimmick === "fragile" ? 1.5 : 1) * (e.gimmick === "burrow" && e.burrowedNext ? 1.6 : 1);
+    const weakenMult = e.status?.weaken?.turns > 0 ? 1 - e.status.weaken.dmg / 100 : 1;
+    const dmg = Math.max(1, Math.round(e.atk * enemyAtkMult(e) * (it.mult || 1) * gimmickMult * weakenMult - stats.def)) * hitsEst;
+    const arcaneHeavy = e.gimmick === "arcane" && e.intent === "heavy";
+    const def = Math.max(1, Math.round(dmg * (arcaneHeavy ? 0.7 : 0.4)));
+    return { dmg, def };
+  };
+
   const directDamagePreview = (spec, usedSkill, category = usedSkill ? "skill" : "attack", skillKey = null) => {
     const info = currentAttackMultiplier(usedSkill);
     const mod = skillKey ? (player.skillMods || {})[skillKey] : null;
@@ -801,9 +815,24 @@ export default function HackRoguelike() {
     });
   };
 
+  // 処刑予告中、このボタンが実際に処刑を中断できるか(20%閾値の火力ルート、または確定・延長できる気絶/凍結ルート)
+  const willInterruptExecution = (range, spec = null) => {
+    if (!isHeavyCounterplay(enemy)) return false;
+    const ccType = spec?.applyStatus?.type;
+    if (ccType === "stun" || ccType === "freeze") {
+      const current = enemy.status?.[ccType]?.turns || 0;
+      if (Math.max(current, spec.applyStatus.turns) > current) return true;
+    }
+    return !!range && range.min >= enemy.maxHp * HEAVY_COUNTERPLAY.damageThreshold;
+  };
+  const interruptButtonStyle = { border: "2px solid #ef4444", animation: "abyss-interrupt-pop .3s ease-out, abyss-interrupt-glow 1.1s ease-in-out .3s infinite" };
+  const interruptBadgeStyle = { position: "absolute", top: -8, right: -6, fontSize: 15, filter: "drop-shadow(0 0 3px #000)" };
+  // 鉄の処刑人戦だけ「中断不可で暗くする」演出を外し、通常の明るさで表示する(中断可否は上のinterruptButtonStyleで正方向に示す)
+  const buttonOpacity = category => isHeavyCounterplayEnemy(enemy) ? 1 : (previewPlayerAction(enemy, category).effective ? 1 : .45);
+
   const damagePreviewCaption = category => {
     const multiplier = previewPlayerAction(enemy, category).multiplier;
-    if (rhythmFor(enemy)?.key === "executioner") return multiplier < 1 ? "装甲で75%軽減" : multiplier > 1 ? "弱点×2.0" : "";
+    if (rhythmFor(enemy)?.key === "executioner") return ""; // 敵状態欄(combat-rhythm)に一本化
     return multiplier !== 1 ? `状態倍率×${multiplier.toFixed(1)}` : "";
   };
 
@@ -3540,6 +3569,8 @@ export default function HackRoguelike() {
         @keyframes abyss-notice { 0% { transform: translate(-50%,-8px) scale(.85); opacity: 0; } 20%,75% { transform: translate(-50%,0) scale(1); opacity: 1; } 100% { transform: translate(-50%,-10px) scale(1.05); opacity: 0; } }
         @keyframes abyss-danger-pulse { 0%,100% { box-shadow: inset 0 0 18px rgba(220,38,38,.25); } 50% { box-shadow: inset 0 0 34px rgba(239,68,68,.7); } }
         @keyframes abyss-ready-glow { 0%,100% { box-shadow: 0 0 8px rgba(96,165,250,.3); } 50% { box-shadow: 0 0 18px rgba(96,165,250,.75); } }
+        @keyframes abyss-interrupt-pop { 0% { transform: scale(.7); } 60% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        @keyframes abyss-interrupt-glow { 0%,100% { box-shadow: 0 0 5px 1px rgba(239,68,68,.45); } 50% { box-shadow: 0 0 12px 2px rgba(239,68,68,.8); } }
       `}</style>
       {combatNotice && <div key={combatNotice.nonce} data-testid="combat-notice" style={{ position: "fixed", zIndex: 30, left: "50%", top: "38%", transform: "translateX(-50%)", pointerEvents: "none", whiteSpace: "nowrap", borderRadius: 10, padding: "10px 18px", fontSize: 22, fontWeight: 900, color: combatNotice.tone === "ice" ? "#bae6fd" : combatNotice.tone === "blue" ? "#dbeafe" : "#fde68a", background: "rgba(12,10,9,.92)", border: `2px solid ${combatNotice.tone === "ice" ? "#38bdf8" : combatNotice.tone === "blue" ? "#60a5fa" : "#fbbf24"}`, textShadow: "0 2px 4px #000", animation: "abyss-notice .9s ease-out forwards" }}>{combatNotice.text}</div>}
       {playerHitFx.nonce > 0 && (
@@ -3628,27 +3659,44 @@ export default function HackRoguelike() {
           )}
           <Bar cur={enemy.hp} max={enemy.maxHp} color={enemy.rhythmState?.phase === "exposed" ? "#fbbf24" : "#dc2626"} />
           <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>{Math.max(0, enemy.hp)} / {enemy.maxHp}　攻撃 {Math.round(enemy.atk * enemyAtkMult(enemy))}{enemyAtkMult(enemy) > 1 ? "↑" : ""}</div>
-          {isHeavyCounterplayEnemy(enemy) && executionCountdown(enemy) !== null && (
-            <div data-testid="execution-countdown" style={{ margin: "9px auto 0", width: "min(100%,320px)", padding: isHeavyCounterplay(enemy) ? "10px 12px" : "6px 10px", borderRadius: 8, border: `2px solid ${isHeavyCounterplay(enemy) ? "#ef4444" : "#7f1d1d"}`, background: isHeavyCounterplay(enemy) ? "#450a0a" : "#1c0b0b", color: isHeavyCounterplay(enemy) ? "#fecaca" : "#fca5a5", fontWeight: 900 }}>
-              <div style={{ fontSize: isHeavyCounterplay(enemy) ? 34 : 22, lineHeight: 1 }}>🪓</div>
-              <div style={{ fontSize: isHeavyCounterplay(enemy) ? 18 : 13 }}>処刑まで {executionCountdown(enemy)}行動</div>
-            </div>
-          )}
-          {/* 行動予告(インテント) */}
-          {enemy.intent && !(isHeavyCounterplayEnemy(enemy) && enemy.intent === "heavy") && (() => {
+          {isHeavyCounterplayEnemy(enemy) && executionCountdown(enemy) !== null && (() => {
+            const n = executionCountdown(enemy);
+            const imminent = n === 1;
+            return (
+              <div data-testid="execution-countdown" style={{
+                position: "absolute", top: 10, right: 10, zIndex: 2,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 2,
+                minWidth: imminent ? 42 : 30, minHeight: imminent ? 42 : 30, padding: "0 7px",
+                borderRadius: "14px 14px 3px 14px", boxSizing: "border-box",
+                border: `2px solid ${imminent ? "#fecaca" : "#78716c"}`,
+                background: imminent ? "#ef4444" : "#44403c", color: imminent ? "#fff" : "#e7e5e4",
+                fontWeight: 900, fontSize: imminent ? 19 : 13,
+                boxShadow: imminent ? "0 0 12px rgba(239,68,68,.8)" : "none",
+              }}>
+                <span style={{ fontSize: imminent ? 16 : 12 }}>🪓</span>{n}
+              </div>
+            );
+          })()}
+          {/* 行動予告(インテント)。鉄の処刑人の処刑予告中(intent===heavy)だけ専用表示に切り替える */}
+          {enemy.intent && (() => {
+            if (isHeavyCounterplayEnemy(enemy) && enemy.intent === "heavy") {
+              const est = estimateIntentDamage(enemy);
+              const threshold = Math.ceil(enemy.maxHp * HEAVY_COUNTERPLAY.damageThreshold);
+              return (
+                <div data-testid="execution-intent" style={{ marginTop: 8, fontSize: 16, fontWeight: 900, color: "#fecaca", background: "#1c0b0b", border: "2px solid #ef4444", borderRadius: 6, padding: "6px 14px", display: "inline-block" }}>
+                  <div>🪓 処刑 {est?.dmg ?? "?"}</div>
+                  <div data-testid="execution-threshold" style={{ fontSize: 12, fontWeight: 700, color: "#fca5a5", marginTop: 2 }}>1行動で{threshold}以上なら中断</div>
+                </div>
+              );
+            }
             const it = INTENTS[enemy.intent];
-            const hitsEst = enemy.intent === "flurry" ? 3 : enemy.trait === "swift" && enemy.intent === "attack" ? 2 : 1;
-            const gimmickMult = (enemy.gimmick === "fragile" ? 1.5 : 1) * (enemy.gimmick === "burrow" && enemy.burrowedNext ? 1.6 : 1);
-            const weakenMult = enemy.status?.weaken?.turns > 0 ? 1 - enemy.status.weaken.dmg / 100 : 1;
-            const estDmg = Math.max(1, Math.round(enemy.atk * enemyAtkMult(enemy) * (it.mult || 1) * gimmickMult * weakenMult - stats.def)) * hitsEst;
-            const arcaneHeavy = enemy.gimmick === "arcane" && enemy.intent === "heavy";
-            const estDef = Math.max(1, Math.round(estDmg * (arcaneHeavy ? 0.7 : 0.4)));
+            const est = estimateIntentDamage(enemy);
             const isThreat = ["attack", "heavy", "venom", "flurry"].includes(enemy.intent);
             const col = enemy.intent === "heavy" ? "#f87171" : enemy.intent === "flurry" ? "#fb923c" : enemy.intent === "roar" ? "#fb923c" : enemy.intent === "guard" ? "#60a5fa" : enemy.intent === "venom" ? "#c084fc" : "#e7e5e4";
             return (
               <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: col, background: "#0c0a09", border: `1px solid ${col}`, borderRadius: 6, padding: "4px 10px", display: "inline-block" }}>
                 次の行動:{it.icon}{it.name}{enemy.intent === "flurry" ? "×3" : ""}
-                {isThreat ? `(約${estDmg} / 🛡️防御なら約${estDef})` : enemy.intent === "guard" ? "(被ダメ-50%)" : "(攻撃力UP)"}
+                {isThreat ? `(約${est.dmg} / 🛡️防御なら約${est.def})` : enemy.intent === "guard" ? "(被ダメ-50%)" : "(攻撃力UP)"}
                 {enemy.intent === "venom" ? " +毒付与(防御で無効)" : ""}
                 {enemy.gimmick === "burrow" && enemy.burrowedNext ? " 🪱潜伏明け強化" : ""}
                 {enemy.pattern ? " 🔁" : ""}
@@ -3668,11 +3716,11 @@ export default function HackRoguelike() {
                 <div style={{ fontSize: 10, color: "#a8a29e", marginTop: 3 }}>有効: {valid}</div>
               </div>;
             }
+            if (!exposed) return null; // 通常の装甲状態では軽減率・装甲についての表示を出さない(攻撃/スキルボタンの予想ダメージ側で判断させる)
             const damagePercent = Math.round(previewPlayerAction(enemy, "attack").multiplier * 100);
-            return <div data-testid="combat-rhythm" style={{ marginTop: 6, padding: 7, borderRadius: 7, border: `1px solid ${exposed ? "#fbbf24" : "#60a5fa"}`, background: exposed ? "#422006" : "#0c1b33", boxShadow: exposed ? "0 0 14px rgba(251,191,36,.35)" : "none" }}>
-              <div style={{ fontSize: 11, fontWeight: 800 }}>{label}</div>
-              <div data-testid="damage-efficiency" style={{ color: exposed ? "#fde047" : "#e7e5e4", fontSize: 21, fontWeight: 900, marginTop: 2 }}>敵が受ける{state.phase === "exposed" ? "" : "直接"}ダメージ {damagePercent}%</div>
-              <div style={{ fontSize: 11, color: exposed ? "#fde68a" : "#a8a29e", marginTop: 3 }}>{remaining}</div>
+            return <div data-testid="combat-rhythm" style={{ marginTop: 6, padding: 7, borderRadius: 7, border: "1px solid #fbbf24", background: "#422006", boxShadow: "0 0 14px rgba(251,191,36,.35)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <span data-testid="damage-efficiency" style={{ color: "#fde047", fontSize: 18, fontWeight: 900 }}>💥 {damagePercent / 100}倍</span>
+              <span data-testid="armor-broken-badge" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", background: "#fbbf24", color: "#422006", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>①</span>
             </div>;
           })()}
           {enemy.guardTurns > 0 && <div style={{ fontSize: 11, color: "#60a5fa", marginTop: 4 }}>🛡️ 構え中(受けるダメージ-50%)</div>}
@@ -3733,9 +3781,28 @@ export default function HackRoguelike() {
 
       {/* 操作 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        {(() => { const range = directDamagePreview({ mult: 1, hits: 1 }, false, "attack"); return <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={{ ...btnStyle(false), opacity: previewPlayerAction(enemy, "attack").effective ? 1 : .45, minHeight: 58 }}><div>⚔️ 攻撃</div><div data-testid="attack-damage-preview" style={{ fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>{damagePreviewCaption("attack") && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, "attack").multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption("attack")}</div>}</button>; })()}
-        <button onClick={useDefend} disabled={stats.noDefend > 0 || player.petrified} style={{ ...btnStyle(stats.noDefend > 0 || player.petrified, "#1e40af"), opacity: previewPlayerAction(enemy, "defend").effective ? 1 : .45 }}>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</button>
-        <button data-testid="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={{ ...btnStyle(player.potions <= 0 || player.petrified, "#166534"), opacity: previewPlayerAction(enemy, "heal").effective ? 1 : .45 }}>
+        {(() => {
+          const range = directDamagePreview({ mult: 1, hits: 1 }, false, "attack");
+          const interrupts = willInterruptExecution(range);
+          return <button data-testid="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} style={{ ...btnStyle(false), opacity: buttonOpacity("attack"), minHeight: 58, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
+            {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
+            <div>⚔️ 攻撃</div>
+            <div data-testid="attack-damage-preview" style={{ fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>
+            {damagePreviewCaption("attack") && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, "attack").multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption("attack")}</div>}
+          </button>;
+        })()}
+        {(() => {
+          const defendDisabled = stats.noDefend > 0 || player.petrified;
+          const interrupts = !defendDisabled && isHeavyCounterplay(enemy) && !!enemy.rhythmState?.parryReady;
+          const threat = isHeavyCounterplayEnemy(enemy) && enemy?.intent && ["attack", "heavy", "venom", "flurry"].includes(enemy.intent);
+          const est = threat ? estimateIntentDamage(enemy) : null;
+          return <button onClick={useDefend} disabled={defendDisabled} style={{ ...btnStyle(defendDisabled, "#1e40af"), opacity: buttonOpacity("defend"), minHeight: est ? 58 : undefined, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
+            {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
+            <div>{stats.noDefend > 0 ? "🌹 封印" : player.petrified ? "🗿 石化" : "🛡️ 防御"}</div>
+            {est && <div data-testid="defend-damage-preview" style={{ fontSize: 11, marginTop: 3 }}>被ダメ {est.def}</div>}
+          </button>;
+        })()}
+        <button data-testid="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified} style={{ ...btnStyle(player.potions <= 0 || player.petrified, "#166534"), opacity: buttonOpacity("heal") }}>
           🧪 ×{player.potions}
         </button>
       </div>
@@ -3747,8 +3814,10 @@ export default function HackRoguelike() {
             const dis = cd > 0 || player.petrified;
             const category = s.status ? "status" : ["heal", "shield"].includes(s.kind) ? "heal" : ["guard", "parry"].includes(s.kind) ? "defend" : "skill";
             const range = !s.spec.kind ? directDamagePreview(s.spec, true, category, k) : null;
+            const interrupts = !dis && willInterruptExecution(range, s.spec);
             return (
-              <button data-testid={`skill-button-${k}`} key={k} onClick={() => castSkill(k)} disabled={dis} style={{ ...btnStyle(dis, "#7c2d12"), fontSize: 13, opacity: previewPlayerAction(enemy, category).effective ? 1 : .45, minHeight: 58 }}>
+              <button data-testid={`skill-button-${k}`} key={k} onClick={() => castSkill(k)} disabled={dis} style={{ ...btnStyle(dis, "#7c2d12"), fontSize: 13, opacity: buttonOpacity(category), minHeight: 58, position: "relative", ...(interrupts ? interruptButtonStyle : {}) }}>
+                {interrupts && <span data-testid="interrupt-badge" style={interruptBadgeStyle}>🪓</span>}
                 <div>{s.icon} {s.name}{(player.skillMods || {})[k] ? SKILL_MODS[(player.skillMods || {})[k]].icon : ""}{cd > 0 ? ` (${cd})` : ""}</div>
                 {range && <div style={{ fontSize: 11, marginTop: 3 }}>予想 {range.min}〜{range.max}</div>}
                 {range && damagePreviewCaption(category) && <div style={{ fontSize: 10, color: previewPlayerAction(enemy, category).multiplier > 1 ? "#fde047" : "#fca5a5" }}>{damagePreviewCaption(category)}</div>}
