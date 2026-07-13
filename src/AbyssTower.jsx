@@ -25,6 +25,7 @@ import {
   isHeavyCounterplayEnemy,
   resolveHeavyCounterplay,
 } from "./game/heavyCounterplay.js";
+import { advanceCombatRhythm, directDamageMultiplier, getCombatRhythm, initializeCombatRhythm } from "./game/combatRhythm.js";
 
 let ACTIVE_DIFF = DIFFICULTIES.normal;
 
@@ -186,7 +187,7 @@ function genEnemy(floor, elite = false, traitKey = null) {
   if (isFinal) { e.pattern = base.pattern; e.patternIdx = 0; }
   else if (isBoss) { e.pattern = base.pattern || BOSS_PATTERNS[(Math.floor(floor / 5) - 1 + BOSS_PATTERNS.length) % BOSS_PATTERNS.length]; e.patternIdx = 0; }
   e.intent = rollIntent(e);
-  return e;
+  return initializeCombatRhythm(e);
 }
 
 // 激昂(オーク)込みの実効攻撃倍率。予告ダメージ表示と実処理で共有する
@@ -367,6 +368,13 @@ export default function HackRoguelike() {
   const [playerPopups, setPlayerPopups] = useState([]); // プレイヤーHP付近のダメージ/回復ポップ
   const [enemyHitFx, setEnemyHitFx] = useState(0); // 敵シェイク再生用の一意な値(変わるたびCSSアニメーションを再生させる)
   const [playerHitFx, setPlayerHitFx] = useState({ nonce: 0, heavy: false }); // 画面端フラッシュ再生用
+  const sandboxEnabled = import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("combatSandbox") === "1";
+  const [sandboxMode, setSandboxMode] = useState(false);
+  const [sandboxConfig, setSandboxConfig] = useState({ enemy: "鉄の処刑人", floor: 10, cls: "warrior", blessing: "", contract: "none", equipment: "none", hp: 100, seed: 7001, patternIdx: 2, intent: "heavy" });
+  const sandboxNativeRandom = useRef(null);
+  useEffect(() => () => {
+    if (sandboxNativeRandom.current) Math.random = sandboxNativeRandom.current;
+  }, []);
   const pendingTurnRef = useRef(null); // 演出待ちの敵ターン(連打時は即時フラッシュして解決する)
   const popupIdRef = useRef(0);
   useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, codexRewards: [], ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); if (m.reducedFx) setReducedFx(true); if (typeof m.bgmVolume === "number") setBgmVolumeState(m.bgmVolume); if (typeof m.sfxVolume === "number") setSfxVolumeState(m.sfxVolume); } }); }, []);
@@ -393,6 +401,7 @@ export default function HackRoguelike() {
   }, []);
   // 図鑑(コレクション):敵・レリック・固有能力を発見済みとして永続記録する
   const recordCodex = useCallback((category, keys) => {
+    if (sandboxMode) return;
     const list = (Array.isArray(keys) ? keys : [keys]).filter(Boolean);
     if (!list.length) return;
     setMeta(m => {
@@ -403,7 +412,7 @@ export default function HackRoguelike() {
       metaStorageSave(nm);
       return nm;
     });
-  }, []);
+  }, [sandboxMode]);
   useEffect(() => { if (enemy?.codexId) recordCodex("enemies", enemy.codexId); }, [enemy?.codexId, recordCodex]);
   useEffect(() => { recordCodex("relics", player.relics || []); }, [player.relics, recordCodex]);
   useEffect(() => {
@@ -447,6 +456,7 @@ export default function HackRoguelike() {
   };
 
   const awardSouls = (floorReached, killCount, cleared) => {
+    if (sandboxMode) return;
     // 序盤死でも渋くならない計算式。クリア済みラン(エンドレス)での死亡は超過分のみ加算し二重取りを防ぐ
     let gained;
     if (victoryAwarded) gained = Math.max(0, (floorReached - FINAL_FLOOR) * 4);
@@ -562,6 +572,53 @@ export default function HackRoguelike() {
     const mod = getMod(modKey);
     const ascTag = ascensionKeys.length ? `🌑深淵の彼方×${ascensionKeys.length} ` : "";
     setLog([{ t: `【${cls.name}・${DIFFICULTIES[diffKey].name}】${ascTag}${mod.key !== "none" ? `世界:${mod.icon}${mod.name} ` : ""}${bless ? `祝福:${bless.icon}${bless.name} ` : ""}— 1F:${e.name}が現れた！`, c: "info" }]);
+  };
+
+  const startSandboxCombat = (config = sandboxConfig) => {
+    if (!sandboxEnabled) return false;
+    const cfg = { ...sandboxConfig, ...config };
+    setSandboxConfig(cfg);
+    setSandboxMode(true);
+    ACTIVE_DIFF = DIFFICULTIES.normal;
+    ACTIVE_MOD = getMod("none");
+    ACTIVE_ASCENSION_FX = {};
+    ACTIVE_ZONE = ZONES.entrance;
+    const cls = CLASSES[cfg.cls] || CLASSES.warrior;
+    let p = cls.base(newPlayer());
+    p.cls = cfg.cls;
+    p.variant = "a";
+    p.diff = "normal";
+    p.mod = "none";
+    p.skills = [cls.skill]; p.knownSkills = [cls.skill]; p.skillMods = {}; p.hooks = {}; p.ascension = [];
+    for (const key of [cfg.blessing, cfg.contract]) {
+      const blessing = BLESSINGS.find(item => item.key === key);
+      if (blessing?.apply) p = blessing.apply(p);
+    }
+    const sandboxEquip = { weapon: null, armor: null, helmet: null, boots: null, ring: null, amulet: null };
+    if (cfg.equipment === "offense") sandboxEquip.weapon = { slot: "weapon", rarity: 0, name: "訓練用大剣", stats: { atk: 25 }, curse: null };
+    if (cfg.equipment === "defense") sandboxEquip.armor = { slot: "armor", rarity: 0, name: "訓練用重鎧", stats: { def: 20, hp: 50 }, curse: null };
+    const candidates = [...ENEMIES, ...ALL_BOSSES];
+    const base = candidates.find(item => item.name === cfg.enemy) || BOSS_POOLS[1].find(item => item.counterplay === "heavy-v1");
+    if (!sandboxNativeRandom.current) sandboxNativeRandom.current = Math.random;
+    let seed = Number(cfg.seed) >>> 0;
+    Math.random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+    let e = genEnemy(Math.max(1, Number(cfg.floor) || 1));
+    e = initializeCombatRhythm({ ...e, ...base, codexId: base.name, hp: e.maxHp, patternIdx: Math.max(0, Number(cfg.patternIdx) || 0), intent: cfg.intent || "attack", status: {}, guardTurns: 0 });
+    const maxHp = totalStats(p, sandboxEquip).maxHp;
+    p.hp = Math.max(1, Math.min(maxHp, Math.round(maxHp * Math.max(1, Math.min(100, Number(cfg.hp) || 100)) / 100)));
+    setEquip(sandboxEquip); setPlayer(p); setEnemy(e); setFloor(Number(cfg.floor) || 1); setKills(0); setCds({});
+    setDrop(null); setShopItem(null); setTurnPending(false); setEnemyPopups([]); setPlayerPopups([]);
+    setLog([{ t: `🧪 サンドボックス: ${base.name} / seed ${cfg.seed}`, c: "info" }]);
+    setScene("combat");
+    return true;
+  };
+  const leaveSandbox = () => {
+    if (sandboxNativeRandom.current) {
+      Math.random = sandboxNativeRandom.current;
+      sandboxNativeRandom.current = null;
+    }
+    setSandboxMode(false);
+    setScene("title");
   };
 
   const stats = totalStats(player, equip);
@@ -927,6 +984,10 @@ export default function HackRoguelike() {
   };
 
   const afterKill = (p, e) => {
+    if (sandboxMode) {
+      setPlayer(p); setEnemy(e); setScene("sandboxResult");
+      return;
+    }
     // 自爆(爆弾虫):直接攻撃でトドメを刺すと爆発。毒・炎上・棘によるトドメなら安全
     if (e.gimmick === "explode" && e.directKill && !e.exploded) {
       e.exploded = true;
@@ -1797,7 +1858,7 @@ export default function HackRoguelike() {
       mult *= frenzyDamageMultiplier(p.hp, stats.maxHp, stats.wrathHp > 0); // 狂血の契約:失ったHPによる追加分
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
-      const dmg = calculateAttackDamage({
+      let dmg = calculateAttackDamage({
         attack: stats.atk,
         killMomentum: p.killMomentum || 0,
         variance: rand(-1, 2),
@@ -1810,6 +1871,7 @@ export default function HackRoguelike() {
         crystallineMultiplier: e.gimmick === "crystalline" ? (usedSkill ? 1.5 : 0.8) : 1,
         targetFragile: e.gimmick === "fragile",
       });
+      dmg = Math.max(0, Math.round(dmg * directDamageMultiplier(e)));
       // 石殻(ガーゴイル):一定未満の弱い一撃を完全に弾く
       const stoneThresh = 6 + Math.round(floor * 1.2);
       if (e.gimmick === "stoneskin" && dmg < stoneThresh) {
@@ -2018,6 +2080,12 @@ export default function HackRoguelike() {
     if (critCdCut) addLog("⏳ 勢いに乗った！全スキルCD-1", "info");
     tickCds(usedSkill, critCdCut + resoRelease);
     if (e.hp <= 0) { e.directKill = true; setEnemy(e); afterKill(p, e); return; } // 直接攻撃によるトドメ(自爆の対象)
+    if (getCombatRhythm(e) && hitsDone > 0) {
+      const rhythm = advanceCombatRhythm(e, "direct-action");
+      e = rhythm.enemy;
+      if (rhythm.events.some(event => event.type === "exposed")) addLog("🎯 装甲破壊！弱点が露出した", "gold");
+      if (rhythm.events.some(event => event.type === "protected")) addLog("🛡️ 装甲を再構築した", "info");
+    }
     if (e.guardTurns > 0) e.guardTurns--; // 構えはプレイヤーの攻撃1ターン分で解除
     // 反撃(リザードマン):攻撃を受けたターン、30%で即座に反撃してくる
     if (e.gimmick === "counter" && hitsDone > 0 && Math.random() < 0.3) {
@@ -2517,7 +2585,7 @@ export default function HackRoguelike() {
   // balance-bot(scripts/balance-bot.mjs)用。DOM文言のscrapingだと脆いため、現在の画面判定に必要な生の状態をそのまま公開する(devのみ)
   if (import.meta.env.DEV) {
     window.__abyssDebug = {
-      scene, floor, player, stats, enemy, cds,
+      scene, floor, player, stats, enemy, cds, turnPending,
       pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices,
       drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
     };
@@ -2538,7 +2606,7 @@ export default function HackRoguelike() {
         })),
         patchEnemy: (patch) => setEnemy(current => current ? {
           ...current,
-          ...selectPatch(patch, ["name", "counterplay", "hp", "maxHp", "atk", "trait", "gimmick", "guardTurns", "status", "intent", "pattern", "patternIdx", "isBoss"]),
+          ...selectPatch(patch, ["name", "counterplay", "combatRhythm", "protectedTurns", "exposedTurns", "hp", "maxHp", "atk", "trait", "gimmick", "guardTurns", "status", "intent", "pattern", "patternIdx", "isBoss"]),
         } : current),
         runEnemyTurn: () => {
           const nextEnemy = { ...enemy, status: enemy?.status ? { ...enemy.status } : undefined };
@@ -2547,11 +2615,46 @@ export default function HackRoguelike() {
           setEnemy(nextEnemy);
         },
         relicCap: RELIC_CAP,
+        ...(sandboxEnabled ? { startSandboxCombat, sandboxConfig: { ...sandboxConfig } } : {}),
       };
     } else {
       delete window.__abyssE2E;
     }
   }
+
+  if (sandboxEnabled && scene === "sandbox") {
+    const update = (key, value) => setSandboxConfig(current => ({ ...current, [key]: value }));
+    const enemies = [...new Map([...ENEMIES, ...ALL_BOSSES].map(item => [item.name, item])).values()];
+    const field = { width: "100%", background: "#1c1917", color: "#e7e5e4", border: "1px solid #57534e", borderRadius: 6, padding: 8, fontFamily: "inherit" };
+    return (
+      <div data-testid="combat-sandbox" style={wrap}>
+        <h2 style={{ color: "#67e8f9", textAlign: "center" }}>🧪 戦闘サンドボックス</h2>
+        <p style={{ color: "#a8a29e", fontSize: 12, textAlign: "center" }}>DEV専用・進行とセーブには反映されません</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 10 }}>
+          <label style={{ fontSize: 12 }}>敵<select data-testid="sandbox-enemy" value={sandboxConfig.enemy} onChange={event => update("enemy", event.target.value)} style={field}>{enemies.map(item => <option key={item.name}>{item.name}</option>)}</select></label>
+          <label style={{ fontSize: 12 }}>階層<input type="number" min="1" value={sandboxConfig.floor} onChange={event => update("floor", event.target.value)} style={field} /></label>
+          <label style={{ fontSize: 12 }}>クラス<select value={sandboxConfig.cls} onChange={event => update("cls", event.target.value)} style={field}>{Object.entries(CLASSES).map(([key, value]) => <option key={key} value={key}>{value.name}</option>)}</select></label>
+          <label style={{ fontSize: 12 }}>HP %<input type="number" min="1" max="100" value={sandboxConfig.hp} onChange={event => update("hp", event.target.value)} style={field} /></label>
+          <label style={{ fontSize: 12 }}>祝福<select value={sandboxConfig.blessing} onChange={event => update("blessing", event.target.value)} style={field}><option value="">なし</option>{BLESSINGS.filter(item => !item.key.startsWith("ks_")).map(item => <option key={item.key} value={item.key}>{item.name}</option>)}</select></label>
+          <label style={{ fontSize: 12 }}>契約<select value={sandboxConfig.contract} onChange={event => update("contract", event.target.value)} style={field}><option value="none">なし</option>{BLESSINGS.filter(item => item.key.startsWith("ks_")).map(item => <option key={item.key} value={item.key}>{item.name}</option>)}</select></label>
+          <label style={{ fontSize: 12 }}>装備<select value={sandboxConfig.equipment} onChange={event => update("equipment", event.target.value)} style={field}><option value="none">装備なし</option><option value="offense">訓練用火力装備</option><option value="defense">訓練用防御装備</option></select></label>
+          <label style={{ fontSize: 12 }}>Seed<input type="number" value={sandboxConfig.seed} onChange={event => update("seed", event.target.value)} style={field} /></label>
+          <label style={{ fontSize: 12 }}>行動段階<input type="number" min="0" value={sandboxConfig.patternIdx} onChange={event => update("patternIdx", event.target.value)} style={field} /></label>
+          <label style={{ fontSize: 12 }}>予告<select data-testid="sandbox-intent" value={sandboxConfig.intent} onChange={event => update("intent", event.target.value)} style={field}>{Object.entries(INTENTS).map(([key, value]) => <option key={key} value={key}>{value.icon}{value.name}</option>)}</select></label>
+        </div>
+        <button data-testid="sandbox-start" onClick={() => startSandboxCombat()} style={{ ...btnStyle(false, "#0e7490"), width: "100%", marginTop: 16 }}>この条件で戦闘開始</button>
+        <button onClick={leaveSandbox} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>タイトルへ戻る</button>
+      </div>
+    );
+  }
+
+  if (sandboxEnabled && scene === "sandboxResult") return (
+    <div data-testid="sandbox-result" style={{ ...wrap, textAlign: "center" }}>
+      <h2 style={{ color: "#fbbf24" }}>🧪 戦闘終了</h2>
+      <button data-testid="sandbox-retry" onClick={() => startSandboxCombat()} style={{ ...btnStyle(false, "#0e7490"), width: "100%" }}>同じ条件で再戦</button>
+      <button onClick={() => setScene("sandbox")} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 8 }}>条件を変更</button>
+    </div>
+  );
 
   // ===== タイトル =====
   if (scene === "title") return (
@@ -2570,6 +2673,7 @@ export default function HackRoguelike() {
       )}
       <button onClick={() => setScene("altar")} style={{ ...btnStyle(false, "#5b21b6"), flex: "none", padding: "12px 48px", fontSize: 14, marginBottom: 10 }}>👻 魂の祭壇(恒久強化)</button>
       <button onClick={() => setScene("codex")} style={{ ...btnStyle(false, "#164e63"), flex: "none", padding: "12px 48px", fontSize: 14, marginBottom: 10 }}>📖 図鑑</button>
+      {sandboxEnabled && <button data-testid="open-combat-sandbox" onClick={() => setScene("sandbox")} style={{ ...btnStyle(false, "#0e7490"), flex: "none", padding: "12px 48px", fontSize: 14, marginBottom: 10 }}>🧪 戦闘サンドボックス</button>}
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={toggleMute} style={{ background: "none", border: "1px solid #44403c", color: "#a8a29e", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{muted ? "🔇 サウンドOFF" : "🔊 サウンドON"}</button>
         <button onClick={toggleReducedFx} style={{ background: "none", border: "1px solid #44403c", color: "#a8a29e", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{reducedFx ? "🎬 演出OFF" : "🎬 演出ON"}</button>
@@ -2926,12 +3030,12 @@ export default function HackRoguelike() {
       <h1 style={{ fontSize: 24, fontWeight: 800, color: "#ef4444", margin: "0 0 16px" }}>力尽きた…</h1>
       <div style={{ background: "#161210", border: "1px solid #292524", borderRadius: 10, padding: 16, marginBottom: 24, width: "100%" }}>
         <div style={{ fontSize: 14, marginBottom: 6 }}>到達階：<span style={{ color: "#fbbf24", fontWeight: 700 }}>{floor}F</span>　<span style={{ color: DIFFICULTIES[player.diff || "normal"].color }}>{DIFFICULTIES[player.diff || "normal"].icon}{DIFFICULTIES[player.diff || "normal"].name}</span></div>
-        <div style={{ fontSize: 14, marginBottom: 6, color: "#c4b5fd" }}>獲得した魂:<span style={{ fontWeight: 700 }}> +{soulsGained} 👻</span>(祭壇で恒久強化に使える)</div>
+        {!sandboxMode && <div style={{ fontSize: 14, marginBottom: 6, color: "#c4b5fd" }}>獲得した魂:<span style={{ fontWeight: 700 }}> +{soulsGained} 👻</span>(祭壇で恒久強化に使える)</div>}
         <div style={{ fontSize: 14, marginBottom: 6 }}>撃破数：<span style={{ fontWeight: 700 }}>{kills}体</span></div>
         <div style={{ fontSize: 14 }}>レベル：<span style={{ fontWeight: 700 }}>Lv{player.level}</span></div>
       </div>
-      <button onClick={() => setScene("classSelect")} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>再挑戦</button>
-      <button onClick={() => setScene("altar")} style={{ ...btnStyle(false, "#5b21b6"), flex: "none", padding: "12px 48px", fontSize: 14 }}>👻 魂の祭壇へ({meta.souls}魂)</button>
+      <button data-testid={sandboxMode ? "sandbox-retry" : undefined} onClick={() => sandboxMode ? startSandboxCombat() : setScene("classSelect")} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>{sandboxMode ? "同じ条件で再戦" : "再挑戦"}</button>
+      {!sandboxMode && <button onClick={() => setScene("altar")} style={{ ...btnStyle(false, "#5b21b6"), flex: "none", padding: "12px 48px", fontSize: 14 }}>👻 魂の祭壇へ({meta.souls}魂)</button>}
     </div>
   );
 
@@ -3362,6 +3466,17 @@ export default function HackRoguelike() {
             </div>
           )}
           {enemy.guardTurns > 0 && <div style={{ fontSize: 11, color: "#60a5fa", marginTop: 4 }}>🛡️ 構え中(受けるダメージ-50%)</div>}
+          {getCombatRhythm(enemy) && (
+            <div data-testid="combat-rhythm" style={{ marginTop: 6 }}>
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, fontSize: 11, color: enemy.exposedTurns > 0 ? "#fbbf24" : "#60a5fa" }}>
+                <span>{enemy.exposedTurns > 0 ? "🎯 弱点露出" : `🛡️ 装甲 ${enemy.protectedTurns}/${getCombatRhythm(enemy).protectedTurns}`}</span>
+                <span>{enemy.exposedTurns > 0 ? `残り${enemy.exposedTurns}T・直接ダメージ100%` : `直接ダメージ${Math.round(getCombatRhythm(enemy).protectedMultiplier * 100)}%`}</span>
+              </div>
+              <div style={{ width: "100%", height: 5, background: "#1c1917", borderRadius: 4, overflow: "hidden", marginTop: 3 }}>
+                <div style={{ height: "100%", width: enemy.exposedTurns > 0 ? "100%" : `${(enemy.protectedTurns / getCombatRhythm(enemy).protectedTurns) * 100}%`, background: enemy.exposedTurns > 0 ? "#fbbf24" : "#3b82f6" }} />
+              </div>
+            </div>
+          )}
           {enemy.status && Object.entries(enemy.status).some(([, v]) => v.turns > 0) && (
             <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 6, flexWrap: "wrap" }}>
               {Object.entries(enemy.status).filter(([, v]) => v.turns > 0).map(([k, v]) => (
