@@ -51,10 +51,11 @@ function deterministicCcSkills(player, cds, stats) {
 
 function expectedHeavyInterruptAction(player, cds, stats, enemy) {
   const threshold = Math.max(0, enemy.maxHp || 0) * HEAVY_COUNTERPLAY.damageThreshold;
+  const guaranteedExtraHits = (stats.noDouble || 0) > 0 ? 0 : Math.floor(Math.max(0, stats.double || 0) / 100);
   const damageSkills = usableSkillsOfKind(player, cds, stats, DAMAGE_SKILLS)
-    .filter(key => stats.atk * SKILLS[key].spec.mult * (SKILLS[key].spec.hits || 1) >= threshold);
+    .filter(key => stats.atk * SKILLS[key].spec.mult * ((SKILLS[key].spec.hits || 1) + guaranteedExtraHits) >= threshold);
   if (damageSkills.length) return { action: "skill", skillKey: pickBestDamageSkill(damageSkills) };
-  if (stats.atk >= threshold) return { action: "attack" };
+  if (stats.atk * (1 + guaranteedExtraHits) >= threshold) return { action: "attack" };
   return null;
 }
 

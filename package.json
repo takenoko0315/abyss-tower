@@ -12,6 +12,7 @@
     "test:e2e:repeat": "playwright test --repeat-each=3",
     "balance": "node scripts/balance-bot.mjs",
     "combat-baseline": "node scripts/combat-decision-bot.mjs",
+    "heavy-scenario": "node scripts/heavy-counterplay-scenario.mjs",
     "check": "oxlint && vitest run --exclude=e2e/** && vite build",
     "preview": "vite preview"
   },
