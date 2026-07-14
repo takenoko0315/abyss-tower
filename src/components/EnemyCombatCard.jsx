@@ -54,9 +54,9 @@ export default function EnemyCombatCard({
                 const visual = damagePopupVisual(tier);
                 const color = damagePopupColor(tier, { target: "enemy", statusColor: pop.status ? STATUS[pop.status].color : null });
                 return (
-                  <div key={pop.id} data-testid="enemy-damage-popup" data-tier={tier} style={{
+                  <div key={pop.id} data-testid="enemy-damage-popup" data-tier={tier} className="abyss-animated" style={{
                     position: "absolute", left: pop.offset * 20 - (popups.length - 1) * 10, top: 0, transform: "translateX(-50%)", whiteSpace: "nowrap",
-                    color, fontWeight: 800, fontSize: visual.fontSize,
+                    color, fontWeight: visual.fontWeight, fontSize: visual.fontSize,
                     textShadow: damagePopupGlow(tier), animation: pop.animation || "abyss-float-up 0.9s ease-out forwards",
                   }}>{pop.status ? `${STATUS[pop.status].icon}${pop.text}` : pop.crit ? `💥${pop.text}` : pop.text}</div>
                 );

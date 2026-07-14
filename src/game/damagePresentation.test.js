@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampTier,
   damagePopupAnimation,
+  damagePopupVisual,
   getDamagePopupTier,
   getPlayerDamagePopupTier,
   scaleHitsForPopup,
@@ -90,6 +91,17 @@ describe("scaleHitsForPopup (連撃時の間引き)", () => {
     const total = result[result.length - 1];
     expect(total.isTotal).toBe(true);
     expect(total.dmg).toBe(100);
+  });
+});
+
+describe("damagePopupVisual", () => {
+  it("階級が上がるほど文字サイズと太さが強くなる", () => {
+    const order = ["normal", "strong", "critical", "catastrophic"];
+    const visuals = order.map(damagePopupVisual);
+    for (let i = 1; i < visuals.length; i++) {
+      expect(visuals[i].fontSize).toBeGreaterThan(visuals[i - 1].fontSize);
+      expect(visuals[i].fontWeight).toBeGreaterThanOrEqual(visuals[i - 1].fontWeight);
+    }
   });
 });
 
