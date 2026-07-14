@@ -30,6 +30,7 @@ import {
 } from "./game/heavyCounterplay.js";
 import { initializeRhythm, previewPlayerAction, resolveEnemyRhythmAction, resolvePlayerRhythmAction, rhythmFor } from "./game/combatRhythm.js";
 import { applySandboxFinalMultipliers, createSandboxEquipment, normalizeSandboxCount, normalizeSandboxMultiplier, SANDBOX_MULTIPLIERS, SANDBOX_PRESETS, sandboxSkillsFor } from "./game/combatSandbox.js";
+import { clampTier, DAMAGE_POPUP_TIERS, damagePopupAnimation, damagePopupColor, damagePopupGlow, damagePopupVisual, getDamagePopupTier, getPlayerDamagePopupTier, scaleHitsForPopup } from "./game/damagePresentation.js";
 import Bar from "./components/Bar.jsx";
 import EnemyCombatCard from "./components/EnemyCombatCard.jsx";
 import EnemyIntentPanel from "./components/EnemyIntentPanel.jsx";
@@ -54,10 +55,14 @@ const getSkillCd = (key, mods) => {
   return Math.max(1, SKILLS[key].cd + (mod === "hasteMod" ? -1 : mod === "ampMod" ? 1 : 0) + (ACTIVE_ZONE.skillCdPenalty || 0)); // 静寂の書庫:CD+1
 };
 
-// balance bot(jsdom)またはwindow.__abyssTestFast===trueの時は演出の待ち時間を完全にゼロにする(TASK-009)
+// balance bot(jsdom)判定。ダメージポップ自体はここでのみ完全スキップする(件数が多い自動プレイの負荷を避けるため)。
+const isJsdomEnv = () => typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent || "");
+
+// balance bot(jsdom)またはwindow.__abyssTestFast===trueの時は演出の待ち時間を完全にゼロにする(TASK-009)。
+// Playwright(実ブラウザ)でwindow.__abyssTestFast=trueを立てるE2Eテストでは、待ち時間だけ短縮しダメージポップは通常どおり出す。
 const isTestFastEnv = () =>
   (typeof window !== "undefined" && window.__abyssTestFast === true) ||
-  (typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent || ""));
+  isJsdomEnv();
 
 // ラン毎の敵プール:全24種から11種だけが「今回の塔」に出現する(顔ぶれが毎回変わる)
 let ACTIVE_BESTIARY = ENEMIES;
@@ -400,6 +405,7 @@ export default function HackRoguelike() {
   const [enemyPopups, setEnemyPopups] = useState([]); // 敵カード上のダメージポップ
   const [playerPopups, setPlayerPopups] = useState([]); // プレイヤーHP付近のダメージ/回復ポップ
   const [enemyHitFx, setEnemyHitFx] = useState(0); // 敵シェイク再生用の一意な値(変わるたびCSSアニメーションを再生させる)
+  const [enemyHitCatastrophic, setEnemyHitCatastrophic] = useState(false); // 直近のヒットにcatastrophic階級が含まれていたか(強いシェイク切り替え用)
   const [playerHitFx, setPlayerHitFx] = useState({ nonce: 0, heavy: false }); // 画面端フラッシュ再生用
   const [combatNotice, setCombatNotice] = useState(null);
   const combatNoticeTimer = useRef(null);
@@ -1971,19 +1977,49 @@ export default function HackRoguelike() {
   // 演出を減らす設定 or テスト環境(balance bot)では、待ち時間・ポップ表示を完全にスキップする
   const skipFx = () => reducedFx || isTestFastEnv();
   const nextPopupId = () => (popupIdRef.current += 1);
-  const pushEnemyPopups = (hits) => {
-    if (skipFx() || !hits || !hits.length) return;
-    const entries = hits.map((h, i) => ({ id: nextPopupId(), text: String(h.dmg), crit: !!h.crit, status: h.status || null, offset: i }));
+  // ダメージポップ自体はreducedFxやE2E高速化フラグでも出す(サイズ・色で火力を伝えるため)。balance-bot(jsdom)のみ負荷回避で完全スキップする。
+  const skipPopups = () => isJsdomEnv();
+  const pushEnemyPopups = (hits, targetMaxHp = enemy?.maxHp || 0) => {
+    if (skipPopups() || !hits || !hits.length) return;
+    const scaled = scaleHitsForPopup(hits, { targetMaxHp });
+    let peakTier = "normal";
+    const entries = scaled.map((h, i) => {
+      if (DAMAGE_POPUP_TIERS.indexOf(h.tier) > DAMAGE_POPUP_TIERS.indexOf(peakTier)) peakTier = h.tier;
+      return {
+        id: nextPopupId(),
+        text: h.isTotal ? `合計 ${h.dmg.toLocaleString()}` : String(h.dmg),
+        crit: !!h.crit, status: h.status || null, offset: i, tier: h.tier,
+        animation: damagePopupAnimation(h.tier, { reduced: reducedFx }),
+      };
+    });
     setEnemyPopups(cur => [...cur, ...entries]);
     entries.forEach((en, i) => setTimeout(() => setEnemyPopups(cur => cur.filter(x => x.id !== en.id)), 900 + i * 90));
-    setEnemyHitFx(n => n + 1);
+    if (!reducedFx) {
+      setEnemyHitCatastrophic(peakTier === "catastrophic");
+      setEnemyHitFx(n => n + 1);
+    }
   };
   const pushPlayerPopups = (hits, kind) => {
-    if (skipFx() || !hits || !hits.length) return;
-    const entries = hits.map((h, i) => ({ id: nextPopupId(), text: String(h.dmg), kind, status: h.status || null, offset: i }));
+    if (skipPopups() || !hits || !hits.length) return;
+    const isHeal = kind === "heal";
+    const scaled = scaleHitsForPopup(hits, {
+      targetMaxHp: stats.maxHp,
+      getTier: h => {
+        const tier = isHeal
+          ? getDamagePopupTier({ damage: h.dmg, targetMaxHp: stats.maxHp })
+          : getPlayerDamagePopupTier({ damage: h.dmg, targetMaxHp: stats.maxHp, isLethal: player.hp - h.dmg <= 0 });
+        return isHeal ? clampTier(tier, "strong") : tier; // 回復ポップは強くしすぎない
+      },
+    });
+    const entries = scaled.map((h, i) => ({
+      id: nextPopupId(),
+      text: h.isTotal ? `合計 ${h.dmg.toLocaleString()}` : String(h.dmg),
+      kind, status: h.status || null, offset: i, tier: h.tier,
+      animation: damagePopupAnimation(h.tier, { reduced: reducedFx }),
+    }));
     setPlayerPopups(cur => [...cur, ...entries]);
     entries.forEach((en, i) => setTimeout(() => setPlayerPopups(cur => cur.filter(x => x.id !== en.id)), 900 + i * 90));
-    if (kind === "dmg") setPlayerHitFx(fx => ({ nonce: fx.nonce + 1, heavy: hits.some(h => h.heavy) }));
+    if (kind === "dmg" && !reducedFx) setPlayerHitFx(fx => ({ nonce: fx.nonce + 1, heavy: hits.some(h => h.heavy) }));
   };
   // 演出待ちの敵ターンを即座に確定させる(連打時に呼ばれる。演出はスキップされるが結果は必ず反映される)
   const flushPendingTurn = () => {
@@ -2375,6 +2411,7 @@ export default function HackRoguelike() {
     if (critCdCut) addLog("⏳ 勢いに乗った！全スキルCD-1", "info");
     tickCds(usedSkill, critCdCut + resoRelease);
     applyManaOverloadCd(usedSkill);
+    pushEnemyPopups(hitLog, e.maxHp); // 撃破(トドメ)分岐より先に出す。オーバーキルの一撃でも必ずポップを表示するため
     if (e.hp <= 0) { e.directKill = true; setEnemy(e); afterKill(p, e); return; } // 直接攻撃によるトドメ(自爆の対象)
     if (e.guardTurns > 0) e.guardTurns--; // 構えはプレイヤーの攻撃1ターン分で解除
     // 反撃(リザードマン):攻撃を受けたターン、30%で即座に反撃してくる
@@ -2389,7 +2426,6 @@ export default function HackRoguelike() {
     if (!skipFx()) {
       setEnemy(eAfterOwn);
       setPlayer(pAfterOwn);
-      pushEnemyPopups(hitLog);
     }
     // === Phase B: 敵のターン(一拍おいてから、元のロジックをそのまま実行) ===
     const enemyHitLog = [];
@@ -2474,6 +2510,10 @@ export default function HackRoguelike() {
     }
     tickCds(key);
     applyManaOverloadCd(key);
+    if (ownPopup) {
+      if (ownPopup.forEnemy) pushEnemyPopups([{ dmg: ownPopup.dmg }], e.maxHp);
+      else pushPlayerPopups([{ dmg: ownPopup.dmg }], ownPopup.kind);
+    }
     if (e.hp <= 0) { setEnemy(e); afterKill(p, e); return; }
     // === Phase A: 自分の行動結果を即時反映(演出用・演出offやテスト環境ではスキップ) ===
     const eAfterOwn = { ...e };
@@ -2481,10 +2521,6 @@ export default function HackRoguelike() {
     if (!skipFx()) {
       setEnemy(eAfterOwn);
       setPlayer(pAfterOwn);
-      if (ownPopup) {
-        if (ownPopup.forEnemy) pushEnemyPopups([{ dmg: ownPopup.dmg }]);
-        else pushPlayerPopups([{ dmg: ownPopup.dmg }], ownPopup.kind);
-      }
     }
     // === Phase B: 敵のターン(一拍おいてから、元のロジックをそのまま実行) ===
     const enemyHitLog = [];
@@ -2551,6 +2587,7 @@ export default function HackRoguelike() {
     // 棘ビルド:防御は反撃も兼ねる。敵が何をしてきたかに関わらず必ず棘が発動する
     const counterDmg = dealThorns(e, true);
     if (counterDmg > 0) addLog(`🌵 防御の構えから棘の反撃！${e.name}に${counterDmg}ダメージ`, "dmg");
+    if (counterDmg > 0) pushEnemyPopups([{ dmg: counterDmg }], e.maxHp);
     if (e.hp <= 0) { setEnemy({ ...e }); afterKill(p, e); return; }
     tickCds();
     // === Phase A: 自分の行動結果を即時反映(演出用・演出offやテスト環境ではスキップ) ===
@@ -2559,7 +2596,6 @@ export default function HackRoguelike() {
     if (!skipFx()) {
       setEnemy(eAfterOwn);
       setPlayer(pAfterOwn);
-      if (counterDmg > 0) pushEnemyPopups([{ dmg: counterDmg }]);
     }
     // === Phase B: 敵のターン(一拍おいてから、元のロジックをそのまま実行。棘は上で発動済みなので反応発動は抑制=二重発動防止) ===
     const enemyHitLog = [];
@@ -2624,8 +2660,8 @@ export default function HackRoguelike() {
     if (!skipFx()) {
       setEnemy(eAfterOwn);
       setPlayer(pAfterOwn);
-      pushPlayerPopups([{ dmg: heal }], "heal");
     }
+    pushPlayerPopups([{ dmg: heal }], "heal");
     // === Phase B: 敵のターン(一拍おいてから、元のロジックをそのまま実行) ===
     const enemyHitLog = [];
     const enemyStatusLog = [];
@@ -3006,7 +3042,7 @@ export default function HackRoguelike() {
       {sandboxEnabled && <button data-testid="open-combat-sandbox" onClick={() => setScene("sandbox")} style={{ ...btnStyle(false, "#0e7490"), flex: "none", padding: "12px 48px", fontSize: 14, marginBottom: 10 }}>🧪 戦闘サンドボックス</button>}
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={toggleMute} style={{ background: "none", border: "1px solid #44403c", color: "#a8a29e", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{muted ? "🔇 サウンドOFF" : "🔊 サウンドON"}</button>
-        <button onClick={toggleReducedFx} style={{ background: "none", border: "1px solid #44403c", color: "#a8a29e", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{reducedFx ? "🎬 演出OFF" : "🎬 演出ON"}</button>
+        <button data-testid="reduced-fx-toggle" onClick={toggleReducedFx} style={{ background: "none", border: "1px solid #44403c", color: "#a8a29e", borderRadius: 8, padding: "8px 20px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{reducedFx ? "🎬 演出OFF" : "🎬 演出ON"}</button>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, width: 220, marginTop: 12 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#a8a29e" }}>
@@ -3706,6 +3742,11 @@ export default function HackRoguelike() {
         @keyframes abyss-ready-glow { 0%,100% { box-shadow: 0 0 8px rgba(96,165,250,.3); } 50% { box-shadow: 0 0 18px rgba(96,165,250,.75); } }
         @keyframes abyss-interrupt-pop { 0% { transform: scale(.7); } 60% { transform: scale(1.1); } 100% { transform: scale(1); } }
         @keyframes abyss-interrupt-glow { 0%,100% { box-shadow: 0 0 5px 1px rgba(251,191,36,.45); } 50% { box-shadow: 0 0 12px 2px rgba(251,191,36,.85); } }
+        /* ダメージポップの階級演出(通常の浮遊/軽い拡大縮小/大きい拡大縮小/移動を抑えたフェード) */
+        @keyframes abyss-popup-pop { 0% { transform: translate(-50%,0) scale(.7); opacity: 1; } 45% { transform: translate(-50%,-10px) scale(1.2); } 100% { transform: translate(-50%,-42px) scale(1); opacity: 0; } }
+        @keyframes abyss-popup-pop-big { 0% { transform: translate(-50%,0) scale(.6); opacity: 1; } 40% { transform: translate(-50%,-14px) scale(1.35); } 100% { transform: translate(-50%,-46px) scale(1.05); opacity: 0; } }
+        @keyframes abyss-popup-fade { 0% { opacity: 1; } 100% { opacity: 0; } }
+        @keyframes abyss-shake-catastrophic { 0%,100% { transform: translateX(0); } 15% { transform: translateX(-9px); } 30% { transform: translateX(9px); } 45% { transform: translateX(-7px); } 60% { transform: translateX(7px); } 75% { transform: translateX(-3px); } 90% { transform: translateX(3px); } }
         @media (prefers-reduced-motion: reduce) {
           .abyss-animated { animation: none !important; }
         }
@@ -3749,7 +3790,7 @@ export default function HackRoguelike() {
           <span style={{ color: "#78716c", fontSize: 12, whiteSpace: "nowrap" }}>💰{player.gold}</span>
           {(player.ap || 0) > 0 && <span style={{ color: "#c084fc", fontSize: 12, whiteSpace: "nowrap" }}>✨{player.ap}</span>}
           <button onClick={toggleMute} style={{ background: "#1c1917", border: "1px solid #44403c", color: "#e7e5e4", borderRadius: 6, width: 30, height: 30, fontSize: 13, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>{muted ? "🔇" : "🔊"}</button>
-          <button onClick={toggleReducedFx} style={{ background: "#1c1917", border: "1px solid #44403c", color: "#e7e5e4", borderRadius: 6, width: 30, height: 30, fontSize: 13, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>{reducedFx ? "🎬" : "🎞️"}</button>
+          <button data-testid="reduced-fx-toggle" onClick={toggleReducedFx} style={{ background: "#1c1917", border: "1px solid #44403c", color: "#e7e5e4", borderRadius: 6, width: 30, height: 30, fontSize: 13, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>{reducedFx ? "🎬" : "🎞️"}</button>
           {statusBtn}
         </div>
       </div>
@@ -3856,7 +3897,7 @@ export default function HackRoguelike() {
             atkBoosted={enemyAtkMult(enemy) > 1}
             dangerPulse={isHeavyCounterplay(enemy)}
             exposed={enemy.rhythmState?.phase === "exposed"}
-            hitFxAnimation={enemyHitFx > 0 ? `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out` : "none"}
+            hitFxAnimation={enemyHitFx > 0 ? (enemyHitCatastrophic ? "abyss-shake-catastrophic 0.5s ease-in-out" : `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out`) : "none"}
             popups={enemyPopups}
             executionCount={isHeavyCounterplayEnemy(enemy) ? executionCountdown(enemy) : null}
             intentPanel={intentPanel}
@@ -3879,13 +3920,18 @@ export default function HackRoguelike() {
       <div style={{ position: "relative" }}>
         {playerPopups.length > 0 && (
           <div style={{ position: "absolute", left: "50%", top: -4, width: 0, height: 0, pointerEvents: "none" }}>
-            {playerPopups.map(pop => (
-              <div key={pop.id} style={{
-                position: "absolute", left: pop.offset * 20 - (playerPopups.length - 1) * 10, top: 0, transform: "translateX(-50%)", whiteSpace: "nowrap",
-                color: pop.status ? STATUS[pop.status].color : pop.kind === "heal" ? "#4ade80" : "#f87171", fontWeight: 800, fontSize: 15,
-                textShadow: "0 1px 3px rgba(0,0,0,0.85)", animation: "abyss-float-up 0.9s ease-out forwards",
-              }}>{pop.status ? `${STATUS[pop.status].icon}${pop.text}` : pop.kind === "heal" ? `+${pop.text}` : pop.text}</div>
-            ))}
+            {playerPopups.map(pop => {
+              const tier = pop.tier || "normal";
+              const visual = damagePopupVisual(tier);
+              const color = damagePopupColor(tier, { target: "player", isHeal: pop.kind === "heal", statusColor: pop.status ? STATUS[pop.status].color : null });
+              return (
+                <div key={pop.id} data-testid="player-damage-popup" data-tier={tier} style={{
+                  position: "absolute", left: pop.offset * 20 - (playerPopups.length - 1) * 10, top: 0, transform: "translateX(-50%)", whiteSpace: "nowrap",
+                  color, fontWeight: 800, fontSize: visual.fontSize,
+                  textShadow: damagePopupGlow(tier), animation: pop.animation || "abyss-float-up 0.9s ease-out forwards",
+                }}>{pop.status ? `${STATUS[pop.status].icon}${pop.text}` : pop.kind === "heal" ? `+${pop.text}` : pop.text}</div>
+              );
+            })}
           </div>
         )}
         <Bar cur={player.hp} max={stats.maxHp} color="#16a34a" height={16} />

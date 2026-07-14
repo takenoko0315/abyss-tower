@@ -1,4 +1,5 @@
 import { ELITE_TRAITS, GIMMICKS, STATUS } from "../game/data.js";
+import { damagePopupColor, damagePopupGlow, damagePopupVisual } from "../game/damagePresentation.js";
 import Bar from "./Bar.jsx";
 import { COMBAT_TONES } from "./combatTheme.js";
 
@@ -48,13 +49,18 @@ export default function EnemyCombatCard({
         <div style={{ position: "relative" }}>
           {popups.length > 0 && (
             <div style={{ position: "absolute", left: "50%", top: -8, width: 0, height: 0, pointerEvents: "none", zIndex: 3 }}>
-              {popups.map(pop => (
-                <div key={pop.id} style={{
-                  position: "absolute", left: pop.offset * 20 - (popups.length - 1) * 10, top: 0, transform: "translateX(-50%)", whiteSpace: "nowrap",
-                  color: pop.status ? STATUS[pop.status].color : pop.crit ? "#facc15" : "#f87171", fontWeight: 800, fontSize: pop.crit ? 22 : 15,
-                  textShadow: "0 1px 3px rgba(0,0,0,0.85)", animation: "abyss-float-up 0.9s ease-out forwards",
-                }}>{pop.status ? `${STATUS[pop.status].icon}${pop.text}` : pop.crit ? `💥${pop.text}` : pop.text}</div>
-              ))}
+              {popups.map(pop => {
+                const tier = pop.tier || "normal";
+                const visual = damagePopupVisual(tier);
+                const color = damagePopupColor(tier, { target: "enemy", statusColor: pop.status ? STATUS[pop.status].color : null });
+                return (
+                  <div key={pop.id} data-testid="enemy-damage-popup" data-tier={tier} style={{
+                    position: "absolute", left: pop.offset * 20 - (popups.length - 1) * 10, top: 0, transform: "translateX(-50%)", whiteSpace: "nowrap",
+                    color, fontWeight: 800, fontSize: visual.fontSize,
+                    textShadow: damagePopupGlow(tier), animation: pop.animation || "abyss-float-up 0.9s ease-out forwards",
+                  }}>{pop.status ? `${STATUS[pop.status].icon}${pop.text}` : pop.crit ? `💥${pop.text}` : pop.text}</div>
+                );
+              })}
             </div>
           )}
           <div className="abyss-ec-visual" style={{
