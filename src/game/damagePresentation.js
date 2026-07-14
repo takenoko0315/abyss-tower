@@ -39,10 +39,10 @@ export function clampTier(tier, maxTier) {
 
 // 階級ごとの見た目パラメータを1箇所に集約(AbyssTower.jsx側に条件分岐を増やさないため)
 const TIER_VISUAL = {
-  normal: { fontSize: 15, scale: 1 },
-  strong: { fontSize: 17, scale: 1.2 },
-  critical: { fontSize: 22, scale: 1.5 },
-  catastrophic: { fontSize: 28, scale: 2 },
+  normal: { fontSize: 15, fontWeight: 700, scale: 1 },
+  strong: { fontSize: 17, fontWeight: 800, scale: 1.2 },
+  critical: { fontSize: 22, fontWeight: 800, scale: 1.5 },
+  catastrophic: { fontSize: 28, fontWeight: 900, scale: 2 },
 };
 
 export function damagePopupVisual(tier) {
