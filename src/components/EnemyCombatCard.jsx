@@ -20,6 +20,14 @@ export default function EnemyCombatCard({
   const activeStatuses = enemy.status ? Object.entries(enemy.status).filter(([, v]) => v.turns > 0) : [];
   const medallionBorder = accentTone ? accentTone.border : enemy.isBoss ? "#7c5a1e" : "#3f3a33";
   const hasNote = (enemy.gimmick && GIMMICKS[enemy.gimmick]) || enemy.cursedByShaman || (enemy.gimmick === "slow" && enemy.resting);
+  // 共鳴クリスタルの特性説明は長文だとPC/モバイル双方で折り返しが目立つため、数値だけの小型チップに分割する。
+  // 進捗チップ(カテゴリ達成度、guard=青の丸ピル)と見分けられるよう status(紫)/attack(橙)のトーンを使う。詳細は title/aria-labelに残す。
+  const crystallineChip = (tone, label) => (
+    <span style={{
+      display: "inline-flex", alignItems: "center", fontSize: 10, fontWeight: 700, lineHeight: 1.4,
+      padding: "1px 6px", borderRadius: 999, border: `1px solid ${tone.border}`, background: tone.bg, color: tone.text,
+    }}>{label}</span>
+  );
 
   return (
     <div
@@ -70,7 +78,18 @@ export default function EnemyCombatCard({
         <div className={executionCount !== null ? "abyss-ec-info has-countdown" : "abyss-ec-info"}>
           {hasNote && (
             <div style={{ fontSize: 10, color: "#8a8580", lineHeight: 1.5, marginBottom: 6 }}>
-              {enemy.gimmick && GIMMICKS[enemy.gimmick] && <span>{GIMMICKS[enemy.gimmick].icon} {GIMMICKS[enemy.gimmick].name}: {GIMMICKS[enemy.gimmick].desc}</span>}
+              {enemy.gimmick === "crystalline" && GIMMICKS.crystalline ? (
+                <span
+                  role="group"
+                  aria-label={`${GIMMICKS.crystalline.icon} ${GIMMICKS.crystalline.name}: ${GIMMICKS.crystalline.desc}`}
+                  title={`${GIMMICKS.crystalline.icon} ${GIMMICKS.crystalline.name}: ${GIMMICKS.crystalline.desc}`}
+                  style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}
+                >
+                  {crystallineChip(COMBAT_TONES.status, "💎 技 +50%")}
+                  {crystallineChip(COMBAT_TONES.attack, "⚔ 通常 -20%")}
+                  <span style={{ fontSize: 9, opacity: .75 }}>技で崩す</span>
+                </span>
+              ) : enemy.gimmick && GIMMICKS[enemy.gimmick] && <span>{GIMMICKS[enemy.gimmick].icon} {GIMMICKS[enemy.gimmick].name}: {GIMMICKS[enemy.gimmick].desc}</span>}
               {enemy.cursedByShaman && <span style={{ marginLeft: 6 }}>🪶 呪詛纏い(攻撃+20%)</span>}
               {enemy.gimmick === "slow" && enemy.resting && <span style={{ marginLeft: 6 }}>🤖 次のターンは充填で動けない</span>}
             </div>
