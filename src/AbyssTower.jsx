@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
-  RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, FINAL_BOSSES, ALL_BOSSES, PERKS, SKILLS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
+  RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, FINAL_BOSSES, ALL_BOSSES, PERKS, SKILLS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, AWAKENINGS, AWAKENING_MAP, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
 } from "./game/data.js";
 import { SFX, setSfxMuted, setSfxVolume } from "./game/sfx.js";
 import { playBgm, setBgmMuted, setBgmVolume } from "./game/bgm.js";
@@ -17,6 +17,7 @@ import {
   resolveEnemyOngoingEffects,
   resolvePlayerOngoingEffects,
   rollAdditionalHits,
+  rollInfiniteBladeBonus,
 } from "./game/combat.js";
 import {
   consumeRiposte,
@@ -248,8 +249,11 @@ function totalStats(player, equip) {
   for (const slot of SLOT_KEYS) {
     const it = equip[slot];
     if (!it) continue;
+    // 深淵覚醒「呪詛反転」: 呪い装備の正のステータスを2倍にする(ペナルティは下のCURSES.applyでそのまま適用される)
+    const cursedDouble = player.awakening === "cursereversal" && it.curse ? 2 : 1;
     for (const [k, v] of Object.entries(effStats(it))) {
-      if (k === "hp") t.maxHp += v; else t[k] = (t[k] || 0) + v;
+      const value = v * cursedDouble;
+      if (k === "hp") t.maxHp += value; else t[k] = (t[k] || 0) + value;
     }
   }
   // レリックのステータス
@@ -274,6 +278,33 @@ function totalStats(player, equip) {
   // 回避は上限40%(装備・祝福・ゾーンを重ねても実質無敵にならないように)
   if (t.dodge) t.dodge = Math.min(40, t.dodge);
   return t;
+}
+
+// ===== 深淵覚醒(10Fボス撃破後の3択) =====
+// 候補資格の判定。「遺物炉心」は常にtrue(汎用覚醒・候補が3つ未満の時の補充にも使われる)
+const AWAKENING_CONDITIONS = {
+  plaguecore: (p, st) => (st.poisonPower || 0) > 0 || (p.skills || []).includes("poisonblade") || (st.alwaysPoison || 0) > 0 || p.origin === "venom",
+  cindercore: (p, st) => (st.burnPower || 0) > 0 || (p.skills || []).includes("flamestrike") || (st.alwaysBurn || 0) > 0 || p.origin === "cinder",
+  bloodterminal: (p, st) => (st.bleedPower || 0) > 0 || (st.alwaysBleed || 0) > 0 || p.origin === "bloodblade",
+  infiniteblade: (p, st) => (st.double || 0) >= 20 || (st.crit || 0) >= 25 || p.cls === "assassin",
+  manaOverload: (p) => p.cls === "mage" || (p.skills || []).length >= 3,
+  bloodvat: (p, st) => (st.lifesteal || 0) >= 8 || p.cls === "vampire",
+  cursereversal: (p, st, eq) => Object.values(eq || {}).some(it => it?.curse),
+  relicengine: () => true,
+};
+
+// 条件を満たす覚醒から最大3つ(重複なし)。3つ未満なら残りをランダムに補って必ず3つにする
+function candidateAwakenings(p, st, eq) {
+  const eligible = AWAKENINGS.filter(a => AWAKENING_CONDITIONS[a.key]?.(p, st, eq));
+  const poolKeys = eligible.sort(() => Math.random() - 0.5).slice(0, 3).map(a => a.key);
+  if (poolKeys.length < 3) {
+    const rest = AWAKENINGS.filter(a => !poolKeys.includes(a.key)).sort(() => Math.random() - 0.5);
+    for (const a of rest) {
+      if (poolKeys.length >= 3) break;
+      poolKeys.push(a.key);
+    }
+  }
+  return poolKeys.sort(() => Math.random() - 0.5);
 }
 
 // ===== コンポーネント =====
@@ -320,7 +351,7 @@ function ItemCard({ item, label }) {
 }
 
 export default function HackRoguelike() {
-  const newPlayer = () => ({ level: 1, xp: 0, hp: 60, maxHp: 60, atk: 8, def: 2, crit: 10, critDmg: 150, lifesteal: 0, double: 0, potions: 3, gold: 0, skills: ["strike"], knownSkills: ["strike"], skillMods: {}, hooks: {}, variant: "a", cls: "warrior", fury: 0, combo: 0, resonance: 0, barrier: 0, killMomentum: 0, tree: [], sp: 0, ap: 1, baseThorns: 0, relics: [] }); // ap:1 — 初期覚醒Pで最初のボス前にクラスアビリティを1つ選べる
+  const newPlayer = () => ({ level: 1, xp: 0, hp: 60, maxHp: 60, atk: 8, def: 2, crit: 10, critDmg: 150, lifesteal: 0, double: 0, potions: 3, gold: 0, skills: ["strike"], knownSkills: ["strike"], skillMods: {}, hooks: {}, variant: "a", cls: "warrior", fury: 0, combo: 0, resonance: 0, barrier: 0, killMomentum: 0, tree: [], sp: 0, ap: 1, baseThorns: 0, relics: [], awakening: null }); // ap:1 — 初期覚醒Pで最初のボス前にクラスアビリティを1つ選べる。awakening:null — 深淵覚醒(10Fボス撃破後に1つだけ選ぶ・ラン限定)
   const [scene, setScene] = useState("title");
   const [player, setPlayer] = useState(newPlayer());
   const [equip, setEquip] = useState({ weapon: null, armor: null, helmet: null, boots: null, ring: null, amulet: null });
@@ -337,6 +368,7 @@ export default function HackRoguelike() {
   const [forgeSlot, setForgeSlot] = useState(null);
   const [relicGot, setRelicGot] = useState(null);
   const [relicChoices, setRelicChoices] = useState([]);
+  const [awakeningChoices, setAwakeningChoices] = useState([]);
   const [skillChoices, setSkillChoices] = useState([]);
   const [pendingKill, setPendingKill] = useState(null);
   const [pendingClass, setPendingClass] = useState(null);
@@ -1132,6 +1164,15 @@ export default function HackRoguelike() {
 
   // 撃破後の進行(レベルアップ → ドロップ → 次の階)
   const progressAfterKill = (np, e) => {
+    // 深淵覚醒: 10Fボスを撃破した後、通常の進行へ戻る前に3択を1回だけ挟む(ラン中1回のみ)
+    if (e.isBoss && !e.isFinal && floor === 10 && !np.awakening) {
+      const pool = candidateAwakenings(np, totalStats(np, equip), equip);
+      setAwakeningChoices(pool);
+      setPendingKill(e);
+      setPlayer(np);
+      setScene("awakeningChoice");
+      return;
+    }
     const discount = np.discountNextLevel ? 0.5 : 1; // 巻き戻しの一歩:初回のみ半分
     const need = Math.round((15 + np.level * 9) * discount);
     if (np.xp >= need) {
@@ -1216,6 +1257,8 @@ export default function HackRoguelike() {
     }
     SFX.kill();
     setKills(k => k + 1);
+    // 深淵覚醒「魔力暴走」: 敵を撃破すると全スキルCDが0になる
+    if (p.awakening === "manaOverload") setCds(() => Object.fromEntries(p.skills.map(k => [k, 0])));
     if (p.pPoison) p = { ...p, pPoison: null }; // 戦闘終了で毒は消える
     if (p.fury) p = { ...p, fury: 0 };          // 闘志は戦闘毎にリセット
     if (p.doubleStack) p = { ...p, doubleStack: 0 }; // 加速する連撃の蓄積も戦闘毎にリセット
@@ -1316,6 +1359,20 @@ export default function HackRoguelike() {
     const e = pendingKill;
     setPendingKill(null);
     progressAfterKill(player, e);
+  };
+
+  // 深淵覚醒の選択(強制・見送りなし。ラン中1回のみ・レリック所持枠には含めない)
+  const chooseAwakening = (key) => {
+    const a = AWAKENING_MAP[key];
+    const updated = { ...player, awakening: key };
+    setAwakeningChoices([]);
+    setPlayer(updated);
+    addLog(`🌌 深淵覚醒 — ${a.name}を獲得した`, "gold");
+    addLog(`ビルドの限界が崩壊した`, "hurt");
+    SFX.relic();
+    const e = pendingKill;
+    setPendingKill(null);
+    progressAfterKill(updated, e);
   };
 
   // レリックが上限に達している場合の入れ替え/見送りハンドラー
@@ -1900,6 +1957,16 @@ export default function HackRoguelike() {
     });
   };
 
+  // 深淵覚醒「魔力暴走」: スキル使用時、そのスキル以外の全スキルCDを1短縮する(同じスキルの連発は許可しない)
+  const applyManaOverloadCd = (usedKey) => {
+    if (!usedKey || player.awakening !== "manaOverload") return;
+    setCds(prev => {
+      const n = { ...prev };
+      for (const k of player.skills) if (k !== usedKey) n[k] = Math.max(0, (n[k] ?? 0) - 1);
+      return n;
+    });
+  };
+
   // ===== 戦闘演出(TASK-009): ダメージポップ・ヒットシェイク・敵ターンの間 =====
   // 演出を減らす設定 or テスト環境(balance bot)では、待ち時間・ポップ表示を完全にスキップする
   const skipFx = () => reducedFx || isTestFastEnv();
@@ -1978,6 +2045,8 @@ export default function HackRoguelike() {
     }
     // 連刃(暗殺者・型b): 連撃発動時、さらに20%でもう1撃
     if (bonus > 0 && player.cls === "assassin" && player.variant === "b" && Math.random() < 0.2) bonus++;
+    // 深淵覚醒「無限刃」: 追加ヒットのたび40%でさらに追加ヒット(1行動の最大ヒット数10で頭打ち)
+    if (bonus > 0 && player.awakening === "infiniteblade") bonus = rollInfiniteBladeBonus(bonus, 10, baseHits);
     // 戦士「闘志」: MAX時の攻撃は「解放」— 確定クリ・1.5倍で全消費
     const furyCap = player.variant === "b" ? 7 : 5;
     const furyRate = player.variant === "b" ? 0.08 : 0.06;
@@ -1994,7 +2063,16 @@ export default function HackRoguelike() {
     const enemyCCed = () => (e.status?.freeze?.turns > 0) || (e.status?.stun?.turns > 0);
     const enemyHasStatus = () => e.status && Object.values(e.status).some(v => v.turns > 0);
     const usedDefendLast = !!p.defendedLast;
+    // 深淵覚醒「疫病核」: 毒を付与するたび、蓄積している毒ダメージの50%を即時ダメージ(持続・蓄積値は消費しない)
+    const procPlagueCore = (enemyRef) => {
+      if (player.awakening === "plaguecore" && enemyRef.hp > 0 && (enemyRef.status?.poison?.turns || 0) > 0) {
+        const proc = Math.floor((enemyRef.status.poison.dmg || 0) * 0.5);
+        if (proc > 0) enemyRef.hp -= proc;
+      }
+    };
     for (let i = 0; i < baseHits + bonus && e.hp > 0; i++) {
+      // 深淵覚醒「無限刃」の安全策(二重防御): どんな経路でbonusが増えても1行動10ヒットで必ず打ち止め
+      if (player.awakening === "infiniteblade" && i >= 10) break;
       // 霊体(亡霊):通常攻撃は25%ですり抜ける(スキルは必中)
       if (!usedSkill && e.gimmick === "ghost" && Math.random() < 0.25) {
         addLog(`🌫️ 攻撃が${e.name}をすり抜けた…(スキルなら必中)`, "info");
@@ -2037,6 +2115,8 @@ export default function HackRoguelike() {
       mult *= frenzyDamageMultiplier(p.hp, stats.maxHp, stats.wrathHp > 0); // 狂血の契約:失ったHPによる追加分
       if (e.gimmick === "spellward" && usedSkill) mult *= 0.6;               // 魔法耐性(吸魔蛾)
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
+      if (player.awakening === "relicengine") mult *= Math.pow(1.15, (player.relics || []).length); // 深淵覚醒「遺物炉心」: レリック1個につき与ダメ×1.15
+      if (player.awakening === "bloodvat" && p.hp / stats.maxHp <= 0.35) mult *= 2; // 深淵覚醒「不死血槽」: HP35%以下で全与ダメ2倍
       const dmg = calculateAttackDamage({
         attack: stats.atk,
         killMomentum: p.killMomentum || 0,
@@ -2059,6 +2139,17 @@ export default function HackRoguelike() {
       e.hp -= dmg;
       totalDmg += dmg;
       counterplayDirectDamage += dmg;
+      // 深淵覚醒「紅蓮機関」: 炎上中の敵へ直接攻撃を当てるたび、炎上ダメージが即座にもう1回発生(1ヒットごと)
+      if (player.awakening === "cindercore" && dmg > 0 && e.hp > 0 && (e.status?.burn?.turns || 0) > 0) {
+        let cinderRate = hasNode(player, "m1") ? 0.11 : 0.06;
+        if (hasRelic(player, "burn")) cinderRate += 0.04;
+        cinderRate += ACTIVE_ZONE.burnBoost || 0;
+        cinderRate *= 1 + (stats.burnPower || 0) / 100;
+        const cinderDmg = Math.max(1, Math.round(e.maxHp * cinderRate));
+        e.hp -= cinderDmg;
+        totalDmg += cinderDmg;
+        addLog(`🔥 紅蓮機関が発動！追加${cinderDmg}ダメージ`, "dmg");
+      }
       if (dmg > 0) hitLog.push({ dmg, crit: isCrit }); // ダメージポップ用(TASK-009)
       if (e.gimmick === "mirrorimg") e.mirrorStore = dmg; // 鏡霊:直前の一撃を記憶(次の敵ターンで跳ね返す)
       if (ACTIVE_ZONE.enemyThorns && dmg > 0) reflectSum += Math.round(4 + floor * 1.2); // 鏡の回廊:敵も棘をまとう
@@ -2068,12 +2159,21 @@ export default function HackRoguelike() {
         if (stats.critPoison > 0 && e.hp > 0) { // 会心の刺
           const pd = Math.max(1, Math.round(stats.atk * 0.25));
           applyStatus(e, "poison", 2, pd);
+          procPlagueCore(e);
           addLog(`🗡️ 会心の一撃が毒を刻んだ`, "dmg");
         }
         if (stats.critBleed > 0 && e.hp > 0) { // 会心の傷跡
           const bd = Math.max(1, Math.round(stats.atk * 0.25 * (1 + (stats.bleedPower || 0) / 100)));
           applyStatus(e, "bleed", 3, bd);
           addLog(`🗡️ 会心の一撃が傷跡を刻んだ`, "dmg");
+        }
+        // 深淵覚醒「血の終端」: クリティカル時、敵の出血ダメージを即座に2回発生(残りターンは減らさない)
+        if (player.awakening === "bloodterminal" && e.hp > 0 && (e.status?.bleed?.turns || 0) > 0) {
+          const bleedProc = (e.status.bleed.dmg || 0) * 2;
+          if (bleedProc > 0) {
+            e.hp -= bleedProc;
+            addLog(`🩸 血の終端が発動！出血ダメージ×2(${bleedProc})`, "dmg");
+          }
         }
         if (stats.critGauge > 0) { // 闘気の共鳴:クリ命中でクラスゲージ+1
           if (player.cls === "warrior") { const cap = player.variant === "b" ? 7 : 5; if ((p.fury || 0) < cap) { p.fury = Math.min(cap, (p.fury || 0) + 1); addLog(`🔥 闘気の共鳴で闘志+1(${p.fury}/${cap})`, "info"); } }
@@ -2098,6 +2198,12 @@ export default function HackRoguelike() {
           const before = p.barrier || 0;
           p.barrier = Math.min(cap, before + (nh - stats.maxHp) * 2); // 余剰の2倍が凝固する
           if (p.barrier > before) addLog(`🩸 余剰の血が障壁に(${p.barrier}/${cap})`, "heal");
+        } else if (player.awakening === "bloodvat" && nh > stats.maxHp) {
+          // 深淵覚醒「不死血槽」: 最大HPを超えた回復分を障壁へ変換(上限=最大HP)
+          const cap = stats.maxHp;
+          const before = p.barrier || 0;
+          p.barrier = Math.min(cap, before + (nh - stats.maxHp));
+          if (p.barrier > before) addLog(`🫀 不死血槽が超過回復を障壁に(${p.barrier}/${cap})`, "heal");
         }
         p.hp = Math.min(stats.maxHp, nh);
       };
@@ -2172,6 +2278,7 @@ export default function HackRoguelike() {
     if (mod === "venomMod" && e.hp > 0) {
       let pd = Math.max(1, Math.round(stats.atk * 0.35 * (1 + (stats.poisonPower || 0) / 100)));
       applyStatus(e, "poison", 2, pd);
+      procPlagueCore(e);
       addLog(`🟣 改造[猛毒]が${e.name}を蝕む！`, "dmg");
     }
     if (mod === "frostMod" && e.hp > 0 && Math.random() < 0.25) {
@@ -2191,6 +2298,7 @@ export default function HackRoguelike() {
     if (stats.alwaysPoison > 0 && e.hp > 0) {
       let pd = Math.max(1, Math.round(stats.atk * 0.3 * (1 + (stats.poisonPower || 0) / 100)));
       applyStatus(e, "poison", 2, pd);
+      procPlagueCore(e);
       addLog(`🟣 大鎌の呪毒が${e.name}を蝕む…`, "dmg");
     }
     // ユニーク: 常燃(攻撃するたび炎上)
@@ -2218,6 +2326,7 @@ export default function HackRoguelike() {
       let turns = s.type === "freeze" && hasNode(player, "m2") ? s.turns + 1 : s.turns;   // 絶対零度
       if (s.type === "freeze" && hasRelic(player, "freeze")) turns += 1;                  // 氷河の核
       applyStatus(e, s.type, turns, dmg);
+      if (s.type === "poison") procPlagueCore(e);
       addLog(`${STATUS[s.type].icon} ${e.name}に${STATUS[s.type].name}を付与！`, "dmg");
     }
     // 雷撃:確率で気絶
@@ -2231,6 +2340,7 @@ export default function HackRoguelike() {
         let pd = Math.round(stats.atk * 0.3 * (hasNode(player, "a2") ? 1.6 : 1) * (1 + (stats.poisonPower || 0) / 100));
         if (hasRelic(player, "poison")) pd = Math.round(pd * 1.6); // 猛毒の指輪
         applyStatus(e, "poison", 3, Math.max(1, pd));
+        procPlagueCore(e);
         addLog(`🟣 暗殺者の猛毒が回った！`, "dmg");
       }
       if (player.cls === "warrior" && player.variant === "a" && !usedSkill && Math.random() < (hasNode(player, "w3") ? 0.5 : 0.25)) {
@@ -2264,6 +2374,7 @@ export default function HackRoguelike() {
     const critCdCut = critLanded && stats.onCritCd > 0 && Math.random() < 0.4 ? 1 : 0;
     if (critCdCut) addLog("⏳ 勢いに乗った！全スキルCD-1", "info");
     tickCds(usedSkill, critCdCut + resoRelease);
+    applyManaOverloadCd(usedSkill);
     if (e.hp <= 0) { e.directKill = true; setEnemy(e); afterKill(p, e); return; } // 直接攻撃によるトドメ(自爆の対象)
     if (e.guardTurns > 0) e.guardTurns--; // 構えはプレイヤーの攻撃1ターン分で解除
     // 反撃(リザードマン):攻撃を受けたターン、30%で即座に反撃してくる
@@ -2362,6 +2473,7 @@ export default function HackRoguelike() {
       showCombatNotice("火力中断！", "gold");
     }
     tickCds(key);
+    applyManaOverloadCd(key);
     if (e.hp <= 0) { setEnemy(e); afterKill(p, e); return; }
     // === Phase A: 自分の行動結果を即時反映(演出用・演出offやテスト環境ではスキップ) ===
     const eAfterOwn = { ...e };
@@ -2702,6 +2814,16 @@ export default function HackRoguelike() {
             </div>
           );
         })()}
+        {player.awakening && AWAKENING_MAP[player.awakening] && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ color: "#818cf8", fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🌌 深淵覚醒</div>
+            <div style={{ background: "#161210", border: "1px solid #818cf8", boxShadow: "0 0 14px rgba(129,140,248,0.3)", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#e7e5e4" }}>
+              <span style={{ marginRight: 4 }}>{AWAKENING_MAP[player.awakening].icon}</span>
+              <span style={{ fontWeight: 700 }}>{AWAKENING_MAP[player.awakening].name}</span>
+              <span style={{ color: "#a8a29e" }}>:{AWAKENING_MAP[player.awakening].desc}</span>
+            </div>
+          </div>
+        )}
         <div style={{ color: "#fbbf24", fontWeight: 700, fontSize: 14, marginBottom: 6 }}>
           レリック <span style={{ color: "#78716c", fontWeight: 400, fontSize: 12 }}>({(player.relics || []).length}/{RELIC_CAP}枠・全{RELICS.length}種)</span>
         </div>
@@ -2778,7 +2900,7 @@ export default function HackRoguelike() {
   if (import.meta.env.DEV) {
     window.__abyssDebug = {
       scene, floor, player, stats, enemy, equip, cds, turnPending,
-      pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices,
+      pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices, awakeningChoices,
       drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
     };
     if (window.__abyssTestFast === true) {
@@ -2794,7 +2916,7 @@ export default function HackRoguelike() {
         },
         patchPlayer: (patch) => setPlayer(current => ({
           ...current,
-          ...selectPatch(patch, ["hp", "atk", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance", "defendedLast", "heavyRiposte", "skills"]),
+          ...selectPatch(patch, ["hp", "atk", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance", "defendedLast", "heavyRiposte", "skills", "awakening", "relics", "lifesteal"]),
         })),
         patchEnemy: (patch) => setEnemy(current => current ? {
           ...current,
@@ -3166,6 +3288,25 @@ export default function HackRoguelike() {
         );
       })}
       <button onClick={declineRelicChoice} style={{ ...btnStyle(false, "#44403c"), width: "100%", marginTop: 6 }}>どれも取らずに進む</button>
+    </div>
+  );
+
+  // ===== 深淵覚醒(10Fボス撃破後の3択・強制選択・レリック画面と同じ見た目を再利用) =====
+  if (scene === "awakeningChoice" && awakeningChoices.length > 0) return (
+    <div style={wrap} data-testid="awakening-choice-scene">
+      {statusOverlay}{statusFab}
+      <p style={{ color: "#818cf8", fontSize: 13, fontWeight: 700, textAlign: "center", marginBottom: 4 }}>🌌 深淵覚醒</p>
+      <p style={{ color: "#a8a29e", fontSize: 12, textAlign: "center", marginBottom: 14 }}>ビルドに応じた覚醒を1つだけ選べる(ラン中1回限り・永続ではない)</p>
+      {awakeningChoices.map(ak => {
+        const a = AWAKENING_MAP[ak];
+        return (
+          <button key={ak} data-testid={`awakening-choice-${ak}`} onClick={() => chooseAwakening(ak)}
+            style={{ display: "block", width: "100%", textAlign: "left", background: "#161210", border: "1px solid #818cf8", boxShadow: "0 0 14px rgba(129,140,248,0.3)", borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer", color: "#e7e5e4", fontFamily: "inherit" }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: "#818cf8" }}>{a.icon} {a.name}</div>
+            <div style={{ fontSize: 13, color: "#a8a29e" }}>{a.desc}</div>
+          </button>
+        );
+      })}
     </div>
   );
 
