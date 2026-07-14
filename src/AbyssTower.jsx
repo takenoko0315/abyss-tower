@@ -297,12 +297,14 @@ const RESONANCE_META = {
   burn: { icon: "🔥", name: "炎", tier1: "炎上中の敵への直撃+30%", tier2: "炎上中の敵へ3ヒット毎に追加発動" },
   bleed: { icon: "🩸", name: "出血", tier1: "出血中の敵へのクリ率+20%", tier2: "クリ時、出血ダメの50%を追加" },
   multi: { icon: "🌀", name: "連撃", tier1: "2ヒット目以降、ヒットごとに+15%", tier2: "4ヒット以上で最後の一撃×3" },
+  guard: { icon: "🛡️", name: "防御", tier1: "棘ダメージ×2", tier2: "敵の攻撃前に棘が発動し、撃破すれば攻撃を無効化" },
 };
 const RESONANCE_NOTICE = {
   poison: { 1: "☣️ 毒共鳴Ⅰが発動", 2: "☣️ 毒共鳴Ⅱ — 毒がもう一度牙を剥く" },
   burn: { 1: "🔥 炎共鳴Ⅰが発動", 2: "🔥 炎共鳴Ⅱ — 業火が連鎖する" },
   bleed: { 1: "🩸 出血共鳴Ⅰが発動", 2: "🩸 出血共鳴Ⅱ — 傷口から追い討ちが放たれる" },
   multi: { 1: "🌀 連撃共鳴Ⅰが発動", 2: "🌀 連撃共鳴Ⅱ — 刃の連鎖が限界を超えた" },
+  guard: { 1: "🛡️ 防御共鳴Ⅰが発動 — 棘ダメージ×2", 2: "🛡️ 防御共鳴Ⅱが発動 — 敵の攻撃前に棘が襲う" },
 };
 
 // ===== 深淵覚醒(10Fボス撃破後の3択) =====
@@ -867,7 +869,7 @@ export default function HackRoguelike() {
         resonanceNotifiedRef.current[system] = level;
       }
     }
-  }, [buildResonance.poison.level, buildResonance.burn.level, buildResonance.bleed.level, buildResonance.multi.level]);
+  }, [buildResonance.poison.level, buildResonance.burn.level, buildResonance.bleed.level, buildResonance.multi.level, buildResonance.guard.level]);
 
   // 現在の与ダメ倍率を可視化するための計算(performAttackの乗算条件と同じ式を使い、実際の数値とズレないようにする)
   // RNG要素(会心判定・回避・気まぐれ系のランダム倍率)は除外し、「今確実にかかっている補正」だけを対象にする
@@ -988,6 +990,7 @@ export default function HackRoguelike() {
     const base = thornsEffective(stats);
     if (base <= 0) return 0;
     let dmg = Math.round(base * (isDefending ? 1 + (stats.defendThornsMult || 0) : 1));
+    if (buildResonance.guard.level >= 1) dmg *= 2; // 防御共鳴Ⅰ: 棘ダメージ×2(既存倍率とは乗算で重なる)
     let wasCrit = false;
     if (stats.thornsCrit > 0 && Math.random() * 100 < stats.thornsCrit) { dmg *= 2; wasCrit = true; }
     e.hp -= dmg;
@@ -1169,6 +1172,15 @@ export default function HackRoguelike() {
           p = { ...p, barrier: p.barrier - absorbed };
           dmg -= absorbed;
         }
+        // 防御共鳴Ⅱ: このヒットがプレイヤーへ命中する前に棘を発動する。撃破すればこのヒット以降(残りの連攻も含む)を中止する
+        if (buildResonance.guard.level >= 2) {
+          const preThorns = dealThorns(e, p.defending);
+          if (preThorns > 0) {
+            addLog(`🛡️ 防御共鳴Ⅱの先制棘が${e.name}に${preThorns}ダメージ`, "dmg");
+            if (enemyStatusLog) enemyStatusLog.push({ dmg: preThorns });
+          }
+          if (e.hp <= 0) break; // 敵は先制棘で撃破された。被弾処理・残りヒットへは進まない
+        }
         p = { ...p, hp: p.hp - dmg };
         if (hitLog && dmg > 0) hitLog.push({ dmg, heavy: act === "heavy" }); // ダメージポップ用(TASK-009)
         // 戦士「闘志」: 被弾(障壁吸収含む)で+1
@@ -1224,7 +1236,8 @@ export default function HackRoguelike() {
           p = { ...p, healReduce: Math.min(40, before + 10) };
           if (p.healReduce > before) addLog(`☠️ 腐敗が回り、回復効果が弱まった(-${p.healReduce}%)`, "hurt");
         }
-        const thornsDmg = skipThorns ? 0 : dealThorns(e, p.defending);
+        // 防御共鳴Ⅱが有効な場合、このヒットの棘は上の先制棘で発動済みなので、被弾後棘は重複発動させない
+        const thornsDmg = (skipThorns || buildResonance.guard.level >= 2) ? 0 : dealThorns(e, p.defending);
         if (thornsDmg > 0) addLog(`棘が${e.name}に${thornsDmg}ダメージを返した${p.defending && stats.defendThornsMult > 0 ? "(防御強化)" : ""}`, "dmg");
         if (p.hp <= 0 || e.hp <= 0) break;
       }
@@ -3168,7 +3181,7 @@ export default function HackRoguelike() {
         },
         patchPlayer: (patch) => setPlayer(current => ({
           ...current,
-          ...selectPatch(patch, ["hp", "atk", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance", "defendedLast", "heavyRiposte", "skills", "awakening", "relics", "lifesteal", "origin", "buildObsession", "rerollsLeft", "knownSkills"]),
+          ...selectPatch(patch, ["hp", "atk", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance", "defendedLast", "heavyRiposte", "skills", "awakening", "relics", "lifesteal", "origin", "buildObsession", "rerollsLeft", "knownSkills", "hooks"]),
         })),
         patchEnemy: (patch) => setEnemy(current => current ? {
           ...current,
@@ -3248,7 +3261,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.51 — 契約3種の軽量調整</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.52 — 防御・棘共鳴</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>

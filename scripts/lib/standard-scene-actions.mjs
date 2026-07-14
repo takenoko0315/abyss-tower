@@ -54,6 +54,8 @@ export function nonCombatAction(container, d, opts) {
     case "shop": return clickByText(container, "店を出て進む");
     case "relicChoice": return clickRandom(container);
     case "relicSwap": return clickRandom(container);
+    case "obsessionChoice": return clickRandom(container);
+    case "awakeningChoice": return clickRandom(container);
     case "dojo": return clickRandom(container);
     case "eventChoice": return clickRandom(container);
     case "path": {

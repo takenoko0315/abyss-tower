@@ -20,6 +20,9 @@ const poisonWeapon = { slot: "weapon", rarity: 1, name: "test", stats: { poisonP
 const burnWeapon = { slot: "weapon", rarity: 1, name: "test", stats: { burnPower: 20 }, ability: "cinder", abilityStats: { alwaysBurn: 1 } };
 const bleedWeapon = { slot: "weapon", rarity: 1, name: "test", stats: { bleedPower: 20 }, ability: "gash", abilityStats: { alwaysBleed: 1 } };
 const multiWeapon = { slot: "weapon", rarity: 1, name: "test", stats: { double: 20 }, ability: "rampage", abilityStats: { rampageCrit: 1 } };
+// 棘20固定・スケーリング系トグルなし(thornsScale/thornsDef/thornsX3)で、共鳴による倍率だけを検証しやすくする
+const guardWeapon = { slot: "weapon", rarity: 1, name: "test", stats: { thorns: 20 }, ability: "immovable", abilityStats: { betterDefend: 1 } };
+const guardFullBuild = { skills: ["ironguard"], relics: ["heart"], origin: "thorn", buildObsession: "guard", hp: 999, def: 50 };
 
 test("装備アフィックス+固有能力+スキル+レリック+出自+執着の6点で共鳴IIになる(装備は二重カウントしない)", async ({ page }) => {
   await preparePage(page);
@@ -162,6 +165,98 @@ test("無限刃と連撃共鳴IIを同時に有効化しても1行動10ヒット
   await expect.poll(async () => popups.count()).toBeGreaterThan(0);
   // ダメージポップ表示自体は安全な上限(6件)で間引かれる。合計値からも10ヒット超過がないことを確認する
   expect(await popups.count()).toBeLessThanOrEqual(6);
+});
+
+test("防御共鳴Iで棘ダメージが同条件の2倍になる", async ({ page }) => {
+  await preparePage(page, { random: 0 });
+  await page.evaluate(weapon => window.__abyssE2E.patchEquip({ weapon }), guardWeapon);
+  await page.evaluate(() => window.__abyssE2E.patchEnemy({
+    hp: 1000000, maxHp: 1000000, atk: 1, intent: "attack",
+    pattern: ["attack"], patternIdx: 0, gimmick: null, trait: null, counterplay: null, guardTurns: 0, status: {},
+  }));
+  const beforeNoResonance = await debugState(page);
+  expect(beforeNoResonance.buildResonance.guard.level).toBe(0); // 装備だけ(2点)ではまだ共鳴しない
+  await page.evaluate(() => window.__abyssE2E.runEnemyTurn());
+  const afterNoResonance = await debugState(page);
+  const baseThorns = beforeNoResonance.enemy.hp - afterNoResonance.enemy.hp;
+  expect(baseThorns).toBe(20); // 棘20・スケーリングなしなのでそのまま20
+
+  await page.evaluate(() => window.__abyssE2E.patchPlayer({ buildObsession: "guard" }));
+  await expect.poll(async () => (await debugState(page)).buildResonance.guard.level).toBe(1);
+  await page.evaluate(() => window.__abyssE2E.patchEnemy({
+    hp: 1000000, maxHp: 1000000, intent: "attack", pattern: ["attack"], patternIdx: 0,
+  }));
+  const beforeResonance = await debugState(page);
+  await page.evaluate(() => window.__abyssE2E.runEnemyTurn());
+  const afterResonance = await debugState(page);
+  const resonantThorns = beforeResonance.enemy.hp - afterResonance.enemy.hp;
+  expect(resonantThorns).toBe(baseThorns * 2);
+  expect(resonantThorns).toBe(40);
+});
+
+test("防御共鳴IIで敵の攻撃前に棘が発動し、撃破すればプレイヤーは被弾せず二重発動もしない", async ({ page }) => {
+  await preparePage(page, { random: 0 });
+  await page.evaluate(weapon => window.__abyssE2E.patchEquip({ weapon }), guardWeapon);
+  await page.evaluate(build => window.__abyssE2E.patchPlayer(build), guardFullBuild);
+  await expect.poll(async () => (await debugState(page)).buildResonance.guard.level).toBe(2);
+  await page.evaluate(() => window.__abyssE2E.patchEnemy({
+    hp: 1, maxHp: 100, atk: 500, intent: "attack",
+    pattern: ["attack"], patternIdx: 0, gimmick: null, trait: null, counterplay: null, guardTurns: 0, status: {},
+  }));
+  const before = await debugState(page);
+  await page.evaluate(() => window.__abyssE2E.runEnemyTurn());
+  const after = await debugState(page);
+  expect(after.enemy.hp).toBeLessThanOrEqual(0); // 先制棘で撃破
+  // 単発の棘(共鳴Iの2倍込みで40)だけが発動している。二重発動していれば80になってしまう
+  expect(before.enemy.hp - after.enemy.hp).toBe(40);
+  expect(after.player.hp).toBe(before.player.hp); // 被弾していない
+});
+
+test("連攻(3ヒット)の1ヒット目で先制棘が敵を倒すと、残りヒットは実行されない", async ({ page }) => {
+  await preparePage(page, { random: 0 });
+  await page.evaluate(weapon => window.__abyssE2E.patchEquip({ weapon }), guardWeapon);
+  await page.evaluate(build => window.__abyssE2E.patchPlayer(build), guardFullBuild);
+  await expect.poll(async () => (await debugState(page)).buildResonance.guard.level).toBe(2);
+  await page.evaluate(() => window.__abyssE2E.patchEnemy({
+    hp: 1, maxHp: 100, atk: 500, intent: "flurry",
+    pattern: ["flurry"], patternIdx: 0, gimmick: null, trait: null, counterplay: null, guardTurns: 0, status: {},
+  }));
+  const before = await debugState(page);
+  await page.evaluate(() => window.__abyssE2E.runEnemyTurn());
+  const after = await debugState(page);
+  expect(after.player.hp).toBe(before.player.hp); // 2・3ヒット目も中止され被弾なし
+  expect(before.enemy.hp - after.enemy.hp).toBe(40); // 1ヒット目の先制棘だけが発動
+});
+
+test("防御禁止状態でも、敵攻撃に対する先制棘は発動する", async ({ page }) => {
+  await preparePage(page, { random: 0 });
+  await page.evaluate(weapon => window.__abyssE2E.patchEquip({ weapon }), guardWeapon);
+  await page.evaluate(build => window.__abyssE2E.patchPlayer({ ...build, hooks: { noDefend: 1 } }), guardFullBuild);
+  await expect.poll(async () => (await debugState(page)).stats.noDefend).toBeGreaterThan(0);
+  await expect.poll(async () => (await debugState(page)).buildResonance.guard.level).toBe(2);
+  await page.evaluate(() => window.__abyssE2E.patchEnemy({
+    hp: 1, maxHp: 100, atk: 500, intent: "attack",
+    pattern: ["attack"], patternIdx: 0, gimmick: null, trait: null, counterplay: null, guardTurns: 0, status: {},
+  }));
+  const before = await debugState(page);
+  await page.evaluate(() => window.__abyssE2E.runEnemyTurn());
+  const after = await debugState(page);
+  expect(after.enemy.hp).toBeLessThanOrEqual(0);
+  expect(after.player.hp).toBe(before.player.hp);
+});
+
+test("共鳴通知は同じ段階で繰り返されない", async ({ page }) => {
+  await preparePage(page, { random: 0 });
+  await page.evaluate(weapon => window.__abyssE2E.patchEquip({ weapon }), guardWeapon);
+  await page.evaluate(build => window.__abyssE2E.patchPlayer(build), guardFullBuild);
+  await expect.poll(async () => (await debugState(page)).buildResonance.guard.level).toBe(2);
+  await expect(page.getByText("🛡️ 防御共鳴Ⅱが発動 — 敵の攻撃前に棘が襲う")).toHaveCount(1);
+  await page.evaluate(() => window.__abyssE2E.patchEnemy({
+    hp: 1000000, maxHp: 1000000, atk: 1, intent: "attack",
+    pattern: ["attack"], patternIdx: 0, gimmick: null, trait: null, counterplay: null, guardTurns: 0, status: {},
+  }));
+  await page.evaluate(() => window.__abyssE2E.runEnemyTurn());
+  await expect(page.getByText("🛡️ 防御共鳴Ⅱが発動 — 敵の攻撃前に棘が襲う")).toHaveCount(1); // 敵ターンを経ても再通知しない
 });
 
 test("古いplayer状態(buildObsession等が存在しない)でもクラッシュしない", async ({ page }) => {
