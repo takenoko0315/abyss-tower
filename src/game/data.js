@@ -554,6 +554,21 @@ export const RELICS = [
 
 export const RELIC_MAP = Object.fromEntries(RELICS.map(r => [r.key, r]));
 
+// ===== 深淵覚醒(10Fボス撃破後に1つだけ選ぶ・ラン限定・レリック所持枠には含めない) =====
+// バランスを取るための仕組みではなく、ビルドが噛み合うと明確に壊れる体験を作るための強力な効果。
+export const AWAKENINGS = [
+  { key: "plaguecore", icon: "☣️", name: "疫病核", desc: "毒を付与するたび、蓄積している毒ダメージの50%を即時ダメージとして与える(持続・蓄積値は消費しない)" },
+  { key: "cindercore", icon: "🔥", name: "紅蓮機関", desc: "炎上中の敵へ直接攻撃を当てると、炎上ダメージが即座にもう1回発生する(1ヒットごとに発動)" },
+  { key: "bloodterminal", icon: "🩸", name: "血の終端", desc: "クリティカルヒット時、敵の出血ダメージを即座に2回発生させる(残りターンは減らさない)" },
+  { key: "infiniteblade", icon: "🌀", name: "無限刃", desc: "追加ヒットが発生するたび40%の確率でさらに追加ヒット(1行動の最大ヒット数は10)" },
+  { key: "manaOverload", icon: "🔮", name: "魔力暴走", desc: "スキル使用時、他の全スキルCDが1短縮。敵を撃破すると全スキルCDが0になる" },
+  { key: "bloodvat", icon: "🫀", name: "不死血槽", desc: "最大HPを超えた回復分を障壁に変換(上限=最大HP)。HP35%以下では全与ダメージ2倍" },
+  { key: "cursereversal", icon: "💀", name: "呪詛反転", desc: "呪い装備の正のステータスをさらに2倍にする(ペナルティはそのまま残る)" },
+  { key: "relicengine", icon: "⚙️", name: "遺物炉心", desc: "所持レリック1個につき全与ダメージ×1.15(乗算)" },
+];
+
+export const AWAKENING_MAP = Object.fromEntries(AWAKENINGS.map(a => [a.key, a]));
+
 export const FINAL_FLOOR = 20;
 
 export const DIFF_RAMP_FLOORS = 5; // 難易度倍率がこの階数までかけて本来の値まで上がる(各難易度のrampFloorsが優先。フォールバック用)

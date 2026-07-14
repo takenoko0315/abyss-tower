@@ -33,6 +33,14 @@ export function rollAdditionalHits(doubleChance, random = Math.random) {
   return hits;
 }
 
+// 深淵覚醒「無限刃」: 追加ヒットのたび40%でさらに追加ヒット。1行動の最大ヒット数(baseHits+bonus)を超えない
+export function rollInfiniteBladeBonus(baseBonus, maxTotalHits = 10, baseHits = 1, chance = 0.4, random = Math.random) {
+  const maxBonus = Math.max(0, maxTotalHits - baseHits);
+  let bonus = Math.min(baseBonus, maxBonus);
+  while (bonus < maxBonus && random() < chance) bonus++;
+  return bonus;
+}
+
 export function calculateAttackDamage({
   attack,
   killMomentum = 0,

@@ -10,6 +10,7 @@ import {
   mergeStatus,
   potionHealingMultiplier,
   rollAdditionalHits,
+  rollInfiniteBladeBonus,
 } from "./combat.js";
 
 describe("TASK-014 contract calculations", () => {
@@ -141,6 +142,20 @@ describe("multi-hit overflow", () => {
     calls = 0;
     expect(rollAdditionalHits(0, random)).toBe(0);
     expect(calls).toBe(0);
+  });
+});
+
+describe("深淵覚醒: 無限刃の上限", () => {
+  it("never lets total hits (baseHits + bonus) exceed the 10-hit cap even at a guaranteed 100% chance", () => {
+    expect(rollInfiniteBladeBonus(1, 10, 1, 1, () => 0)).toBe(9); // 常に成功する乱数でも打ち止め
+  });
+
+  it("respects a smaller baseHits-derived cap for multi-hit skills", () => {
+    expect(rollInfiniteBladeBonus(1, 10, 3, 1, () => 0)).toBe(7);
+  });
+
+  it("never reduces a bonus already below the cap", () => {
+    expect(rollInfiniteBladeBonus(2, 10, 1, 0, () => 1)).toBe(2); // 0%の追加抽選は伸びない
   });
 });
 
