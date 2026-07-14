@@ -9,14 +9,24 @@ import { COMBAT_TONES } from "./combatTheme.js";
 export default function EnemyCombatCard({
   enemy, atkDisplay, atkBoosted, dangerPulse = false, exposed = false,
   hitFxAnimation = "none", popups = [], executionCount = null,
-  intentPanel = null, rhythmChip = null,
+  intentPanel = null, rhythmChip = null, defeatFx = null,
 }) {
   const danger = dangerPulse && !exposed;
   // 状態は「カード全面の塗り」ではなく「上端のアクセント線+控えめな外周グロー」だけで表現する
   const accentTone = exposed ? COMBAT_TONES.chance : (danger || enemy.isFinal) ? COMBAT_TONES.danger : null;
   const cardBg = enemy.isBoss ? "#1a1611" : "#161210";
   const cardBorder = enemy.isBoss ? "#3a2f1f" : "#292524";
-  const animation = danger ? "abyss-danger-pulse .7s ease-in-out infinite" : hitFxAnimation;
+  // 撃破演出(TASK-015): 演出軽減時は既存の単純フェード(abyss-flash-fade-*)へ切り替え、動き・拡大縮小を行わない
+  const defeatCardAnim = !defeatFx ? null : defeatFx.reduced
+    ? "abyss-flash-fade-a 0.3s ease-out forwards"
+    : defeatFx.oneShot ? "abyss-shake-catastrophic 0.5s ease-in-out" : "abyss-shake-a 0.4s ease-in-out";
+  const defeatIconAnim = !defeatFx ? null : defeatFx.reduced
+    ? "abyss-flash-fade-b 0.35s ease-out forwards"
+    : defeatFx.oneShot ? "abyss-defeat-icon-oneshot .6s ease-in forwards" : "abyss-defeat-icon .5s ease-in forwards";
+  const defeatLabelAnim = !defeatFx ? null : defeatFx.reduced
+    ? "abyss-popup-fade 0.35s ease-out forwards"
+    : `abyss-defeat-label ${defeatFx.oneShot ? "0.7s" : "0.55s"} ease-out forwards`;
+  const animation = defeatCardAnim || (danger ? "abyss-danger-pulse .7s ease-in-out infinite" : hitFxAnimation);
   const imminentExecution = executionCount === 1;
   const activeStatuses = enemy.status ? Object.entries(enemy.status).filter(([, v]) => v.turns > 0) : [];
   const medallionBorder = accentTone ? accentTone.border : enemy.isBoss ? "#7c5a1e" : "#3f3a33";
@@ -42,6 +52,15 @@ export default function EnemyCombatCard({
         borderRadius: 12, padding: 14, marginBottom: 12, animation,
       }}
     >
+      {defeatFx && (
+        <div data-testid="enemy-defeat-label" className="abyss-animated" style={{
+          position: "absolute", left: "50%", top: "40%", zIndex: 4, pointerEvents: "none", whiteSpace: "nowrap",
+          fontWeight: 900, fontSize: defeatFx.oneShot ? 22 : 17,
+          color: defeatFx.oneShot ? "#fbbf24" : "#e7e5e4",
+          textShadow: defeatFx.oneShot ? "0 0 14px rgba(251,191,36,.8)" : "0 2px 6px rgba(0,0,0,.7)",
+          animation: defeatLabelAnim,
+        }}>{defeatFx.oneShot ? "一撃撃破" : "撃破"}</div>
+      )}
       {enemy.isFinal && <div style={{ color: COMBAT_TONES.danger.strong, fontSize: 12, fontWeight: 700, textAlign: "center", marginBottom: 6 }}>― 最 終 ボ ス ―</div>}
       {enemy.arenaStage && <div style={{ color: "#fb923c", fontSize: 12, fontWeight: 700, textAlign: "center", marginBottom: 6 }}>🏟️ 闘技場 — {enemy.arenaStage}/2戦目</div>}
 
@@ -63,11 +82,12 @@ export default function EnemyCombatCard({
               })}
             </div>
           )}
-          <div className="abyss-ec-visual" style={{
+          <div className={defeatFx ? "abyss-ec-visual abyss-animated" : "abyss-ec-visual"} style={{
             borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
             background: `radial-gradient(circle at 50% 35%, #2b2620 0%, #14110d 72%)`,
             border: `2px solid ${medallionBorder}`,
             boxShadow: accentTone ? `0 0 14px ${accentTone.glow}` : "0 2px 8px rgba(0,0,0,.5)",
+            animation: defeatIconAnim || "none",
           }}>{enemy.icon}</div>
           <div style={{ fontWeight: 700, color: enemy.isBoss ? "#fbbf24" : "#e7e5e4", marginTop: 8, textAlign: "center" }}>
             {enemy.isBoss && "👑 "}{enemy.name}

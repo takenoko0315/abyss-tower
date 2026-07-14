@@ -511,6 +511,8 @@ export default function HackRoguelike() {
     }
   }, []);
   const pendingTurnRef = useRef(null); // 演出待ちの敵ターン(連打時は即時フラッシュして解決する)
+  const [defeatFx, setDefeatFx] = useState(null); // 撃破演出中の表示状態({ oneShot } | null)。TASK-015
+  const pendingDefeatRef = useRef(null); // 撃破演出待ちのafterKill呼び出し(アンマウント時に安全に処理)
   const popupIdRef = useRef(0);
   const resonanceNotifiedRef = useRef({}); // 系統共鳴: ラン中に段階が初めて有効になった時だけ通知するための既通知記録
   useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, codexRewards: [], ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); if (m.reducedFx) setReducedFx(true); if (typeof m.bgmVolume === "number") setBgmVolumeState(m.bgmVolume); if (typeof m.sfxVolume === "number") setSfxVolumeState(m.sfxVolume); } }); }, []);
@@ -519,6 +521,13 @@ export default function HackRoguelike() {
   useEffect(() => { setSfxVolume(sfxVolume / 100); }, [sfxVolume]);
   // アンマウント時、演出待ちの敵ターンが残っていればタイマーを掃除する
   useEffect(() => () => { if (pendingTurnRef.current) clearTimeout(pendingTurnRef.current.timer); }, []);
+  // アンマウント時、撃破演出待ちのタイマーが残っていれば掃除する(afterKillが呼ばれないまま放置されるだけなので安全)
+  useEffect(() => () => { if (pendingDefeatRef.current) clearTimeout(pendingDefeatRef.current.timer); }, []);
+  const cancelPendingDefeat = () => {
+    if (pendingDefeatRef.current) clearTimeout(pendingDefeatRef.current.timer);
+    pendingDefeatRef.current = null;
+    setDefeatFx(null);
+  };
   useEffect(() => () => { if (combatNoticeTimer.current) clearTimeout(combatNoticeTimer.current); }, []);
   const showCombatNotice = (text, tone = "gold") => {
     if (combatNoticeTimer.current) clearTimeout(combatNoticeTimer.current);
@@ -649,6 +658,7 @@ export default function HackRoguelike() {
   }, [meta.codex, meta.codexRewards, addLog]);
 
   const startRun = (clsKey = "warrior", diffKey = "normal", blessingKey = null, modKey = "none", variantKey = "a", originKey = null, ascensionKeys = []) => {
+    cancelPendingDefeat();
     ACTIVE_DIFF = DIFFICULTIES[diffKey];
     ACTIVE_MOD = getMod(modKey);
     ACTIVE_ASCENSION_FX = computeAscensionFx(ascensionKeys);
@@ -708,6 +718,7 @@ export default function HackRoguelike() {
     setEnemyHitFx(0);
     setPlayerHitFx({ nonce: 0, heavy: false });
     setTurnPending(false);
+    setDefeatFx(null); // 前のランの撃破演出状態(TASK-015)を持ち越さない
     const e = genEnemy(1); e.hp = e.maxHp;
     if (p.forceFirstAttack) e.intent = "attack"; // 先読みの目
     if (p.executeFirstEnemy) e.hp = 1;           // 処刑人の啓示
@@ -803,11 +814,13 @@ export default function HackRoguelike() {
     }
     setEquip(sandboxEquip); setPlayer(p); setEnemy(e); setFloor(cfg.floor); setKills(0); setCds(Object.fromEntries(p.skills.map(key => [key, cfg.skillCd])));
     setDrop(null); setShopItem(null); setTurnPending(false); setEnemyPopups([]); setPlayerPopups([]);
+    cancelPendingDefeat(); // 撃破演出待ちを持ち越さない(再戦/条件変更)
     setLog([{ t: `🧪 サンドボックス: ${base.name} / seed ${cfg.seed}`, c: "info" }]);
     setScene("combat");
     return true;
   };
   const leaveSandbox = () => {
+    cancelPendingDefeat();
     if (sandboxNativeRandom.current) {
       Math.random = sandboxNativeRandom.current;
       sandboxNativeRandom.current = null;
@@ -1462,6 +1475,28 @@ export default function HackRoguelike() {
     progressAfterKill(np, e);
   };
 
+  // ===== 撃破演出(TASK-015): 致死ダメージ検出とafterKillの間に短い撃破演出を挟む =====
+  // oneShot: 行動開始時点で敵が最大HPかつ、この1行動だけで倒した場合にtrue(「一撃撃破」表示に使う)。
+  // jsdom(バランスBot)は完全同期のwhileループでポーリングしておりsetTimeoutが発火する機会がないため、
+  // 演出を挟まずafterKillを即座に呼ぶ(Botの速度・安定性を優先。既存のskipPopups()と同じ判定基準)。
+  const triggerDefeat = (p, e, oneShot) => {
+    if (isJsdomEnv()) { afterKill(p, e); return; }
+    if (pendingDefeatRef.current) return; // 同じ致死結果の多重発火でもafterKillは最初の1回だけ
+    setDefeatFx({ oneShot: !!oneShot });
+    const prefersReducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const delay = reducedFx || prefersReducedMotion
+      ? (oneShot ? 220 : 160) // 演出軽減設定: 大幅短縮・フェードのみ(実際のCSSはEnemyCombatCard側でフェードに切り替える)
+      : isTestFastEnv()
+        ? (oneShot ? 500 : 420) // Playwright等の実ブラウザE2E高速化: フルより短いが、ラベルと最後のポップを確実に検知できる長さ
+        : (oneShot ? 700 + Math.floor(Math.random() * 80) : 500 + Math.floor(Math.random() * 150)); // 通常: 合計450〜650ms目安(一撃撃破はヒットストップ分やや長め)
+    const timer = setTimeout(() => {
+      pendingDefeatRef.current = null;
+      setDefeatFx(null);
+      afterKill(p, e);
+    }, delay);
+    pendingDefeatRef.current = { timer };
+  };
+
   // レリック3択からの選択。所持上限なら入れ替え画面へ
   const chooseRelic = (key) => {
     const r = RELIC_MAP[key];
@@ -1525,6 +1560,7 @@ export default function HackRoguelike() {
     setEnemyHitFx(0);
     setPlayerHitFx({ nonce: 0, heavy: false });
     setTurnPending(false);
+    setDefeatFx(null); // 前の戦闘の撃破演出状態(TASK-015)を持ち越さない
     // 暗殺者「コンボ」: 新しい戦闘は+2から開始(影の相伝の持ち越し値がある場合はそちらを優先)
     if (player.cls === "assassin") {
       setPlayer(p => ({ ...p, combo: Math.max(p.combo || 0, 2) }));
@@ -2183,11 +2219,13 @@ export default function HackRoguelike() {
   };
 
   const performAttack = (spec, label, usedSkill = null) => {
+    if (defeatFx) return; // 撃破演出中は新しい行動を開始できない
     // 連打対応: 前の行動の演出待ち(敵ターン)が残っていれば即座に確定させてから続行する
     const flushed = flushPendingTurn();
     if (flushed?.terminal) return;
     const basePlayer = flushed ? flushed.player : player;
     const baseEnemy = flushed ? flushed.enemy : enemy;
+    const wasFullHpAtActionStart = baseEnemy.hp >= baseEnemy.maxHp; // 「一撃撃破」判定: この行動の開始時点で敵が最大HPだったか
     const counterplayEnemyBefore = { ...baseEnemy, status: baseEnemy.status ? Object.fromEntries(Object.entries(baseEnemy.status).map(([k, v]) => [k, { ...v }])) : undefined };
     let e = { ...baseEnemy, status: baseEnemy.status ? { ...baseEnemy.status } : undefined };
     const rhythmCategory = usedSkill ? "skill" : "attack";
@@ -2582,7 +2620,7 @@ export default function HackRoguelike() {
     tickCds(usedSkill, critCdCut + resoRelease);
     applyManaOverloadCd(usedSkill);
     pushEnemyPopups(hitLog, e.maxHp); // 撃破(トドメ)分岐より先に出す。オーバーキルの一撃でも必ずポップを表示するため
-    if (e.hp <= 0) { e.directKill = true; setEnemy(e); afterKill(p, e); return; } // 直接攻撃によるトドメ(自爆の対象)
+    if (e.hp <= 0) { e.directKill = true; setEnemy(e); triggerDefeat(p, e, wasFullHpAtActionStart); return; } // 直接攻撃によるトドメ(自爆の対象)
     if (e.guardTurns > 0) e.guardTurns--; // 構えはプレイヤーの攻撃1ターン分で解除
     // 反撃(リザードマン):攻撃を受けたターン、30%で即座に反撃してくる
     if (e.gimmick === "counter" && hitsDone > 0 && Math.random() < 0.3) {
@@ -2611,7 +2649,7 @@ export default function HackRoguelike() {
           setEnemy({ ...eAfterOwn }); setPlayer(pp); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
-      if (eAfterOwn.hp <= 0) { setEnemy({ ...eAfterOwn }); pushEnemyPopups(enemyStatusLog); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
+      if (eAfterOwn.hp <= 0) { setEnemy({ ...eAfterOwn }); pushEnemyPopups(enemyStatusLog); triggerDefeat(pp, eAfterOwn, wasFullHpAtActionStart); return { player: pp, enemy: eAfterOwn, terminal: true }; }
       setEnemy({ ...eAfterOwn });
       setPlayer(pp);
       pushEnemyPopups(enemyStatusLog);
@@ -2621,7 +2659,7 @@ export default function HackRoguelike() {
   };
 
   const castSkill = (key) => {
-    if ((cds[key] || 0) > 0 || player.petrified || stats.noSkill > 0) return;
+    if ((cds[key] || 0) > 0 || player.petrified || stats.noSkill > 0 || defeatFx) return;
     const s = SKILLS[key];
     if (s.spec.kind) { castStanceSkill(key); return; } // 防御・カウンター・回復・障壁系(攻撃ロジックを通らない)
     performAttack(s.spec, `${s.icon}${s.name}`, key);
@@ -2629,10 +2667,12 @@ export default function HackRoguelike() {
 
   // 防御・カウンター・回復・障壁系スキルの解決(performAttackの被ダメージループを経由しない別系統)
   const castStanceSkill = (key) => {
+    if (defeatFx) return; // 撃破演出中は新しい行動を開始できない
     const flushed = flushPendingTurn();
     if (flushed?.terminal) return;
     const basePlayer = flushed ? flushed.player : player;
     const baseEnemy = flushed ? flushed.enemy : enemy;
+    const wasFullHpAtActionStart = baseEnemy.hp >= baseEnemy.maxHp;
     const counterplayEnemyBefore = { ...baseEnemy, status: baseEnemy.status ? Object.fromEntries(Object.entries(baseEnemy.status).map(([k, v]) => [k, { ...v }])) : undefined };
     const s = SKILLS[key];
     const spec = s.spec;
@@ -2684,7 +2724,7 @@ export default function HackRoguelike() {
       if (ownPopup.forEnemy) pushEnemyPopups([{ dmg: ownPopup.dmg }], e.maxHp);
       else pushPlayerPopups([{ dmg: ownPopup.dmg }], ownPopup.kind);
     }
-    if (e.hp <= 0) { setEnemy(e); afterKill(p, e); return; }
+    if (e.hp <= 0) { setEnemy(e); triggerDefeat(p, e, wasFullHpAtActionStart); return; }
     // === Phase A: 自分の行動結果を即時反映(演出用・演出offやテスト環境ではスキップ) ===
     const eAfterOwn = { ...e };
     const pAfterOwn = { ...p };
@@ -2706,7 +2746,7 @@ export default function HackRoguelike() {
           setEnemy(eAfterOwn); setPlayer(pp); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
-      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
+      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); triggerDefeat(pp, eAfterOwn, wasFullHpAtActionStart); return { player: pp, enemy: eAfterOwn, terminal: true }; }
       setEnemy(eAfterOwn);
       setPlayer(pp);
       pushEnemyPopups(enemyStatusLog);
@@ -2717,11 +2757,12 @@ export default function HackRoguelike() {
 
   // 防御:このターン受けるダメージ-60%。大技の予告に合わせて使うのが基本
   const useDefend = () => {
-    if (stats.noDefend > 0 || player.petrified) return; // 茨の誓約/石化:防御は封じられている
+    if (stats.noDefend > 0 || player.petrified || defeatFx) return; // 茨の誓約/石化・撃破演出中は防御できない
     const flushed = flushPendingTurn();
     if (flushed?.terminal) return;
     const basePlayer = flushed ? flushed.player : player;
     const baseEnemy = flushed ? flushed.enemy : enemy;
+    const wasFullHpAtActionStart = baseEnemy.hp >= baseEnemy.maxHp;
     const counterplayEnemyBefore = { ...baseEnemy, status: baseEnemy.status ? Object.fromEntries(Object.entries(baseEnemy.status).map(([k, v]) => [k, { ...v }])) : undefined };
     let p = { ...basePlayer, defending: true, defendedLast: true };
     if (player.cls === "warrior") {
@@ -2758,7 +2799,7 @@ export default function HackRoguelike() {
     const counterDmg = dealThorns(e, true);
     if (counterDmg > 0) addLog(`🌵 防御の構えから棘の反撃！${e.name}に${counterDmg}ダメージ`, "dmg");
     if (counterDmg > 0) pushEnemyPopups([{ dmg: counterDmg }], e.maxHp);
-    if (e.hp <= 0) { setEnemy({ ...e }); afterKill(p, e); return; }
+    if (e.hp <= 0) { setEnemy({ ...e }); triggerDefeat(p, e, wasFullHpAtActionStart); return; }
     tickCds();
     // === Phase A: 自分の行動結果を即時反映(演出用・演出offやテスト環境ではスキップ) ===
     const eAfterOwn = { ...e };
@@ -2781,7 +2822,7 @@ export default function HackRoguelike() {
           setEnemy(eAfterOwn); setPlayer(pp); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
-      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
+      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); triggerDefeat(pp, eAfterOwn, wasFullHpAtActionStart); return { player: pp, enemy: eAfterOwn, terminal: true }; }
       setEnemy(eAfterOwn);
       setPlayer(pp);
       pushEnemyPopups(enemyStatusLog);
@@ -2791,11 +2832,12 @@ export default function HackRoguelike() {
   };
 
   const usePotion = () => {
-    if (player.potions <= 0 || player.petrified) return;
+    if (player.potions <= 0 || player.petrified || defeatFx) return;
     const flushed = flushPendingTurn();
     if (flushed?.terminal) return;
     const basePlayer = flushed ? flushed.player : player;
     const baseEnemy = flushed ? flushed.enemy : enemy;
+    const wasFullHpAtActionStart = baseEnemy.hp >= baseEnemy.maxHp;
     const saved = stats.potionSaveCh > 0 && Math.random() * 100 < stats.potionSaveCh; // 不朽の水筒
     let p = { ...basePlayer, potions: saved ? basePlayer.potions : basePlayer.potions - 1 };
     const heal = Math.max(1, Math.round(stats.maxHp * (ACTIVE_MOD.potionHeal || 0.4) * potionHealingMultiplier(stats) * (1 - (p.healReduce || 0) / 100)));
@@ -2809,7 +2851,7 @@ export default function HackRoguelike() {
     if (stats.potionBomb > 0) {
       e.hp -= heal;
       addLog(`🧪 劇薬の飛沫が${e.name}に${heal}ダメージ！`, "dmg");
-      if (e.hp <= 0) { setEnemy({ ...e }); afterKill(p, e); return; }
+      if (e.hp <= 0) { setEnemy({ ...e }); triggerDefeat(p, e, wasFullHpAtActionStart); return; }
     }
     // 素早飲み:1戦闘に1回だけ、ターンを消費せずに飲める(演出不要・即時反映)
     if (!p.quickDrinkUsed) {
@@ -2846,7 +2888,7 @@ export default function HackRoguelike() {
           setEnemy(eAfterOwn); setPlayer(pp); if (!sandboxMode) setBest(b => Math.max(b, floor)); awardSouls(floor, kills, false); SFX.death(); setScene("dead"); return { player: pp, enemy: eAfterOwn, terminal: true };
         }
       }
-      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); afterKill(pp, eAfterOwn); return { player: pp, enemy: eAfterOwn, terminal: true }; }
+      if (eAfterOwn.hp <= 0) { setEnemy(eAfterOwn); pushEnemyPopups(enemyStatusLog); triggerDefeat(pp, eAfterOwn, wasFullHpAtActionStart); return { player: pp, enemy: eAfterOwn, terminal: true }; }
       setEnemy(eAfterOwn);
       setPlayer(pp);
       pushEnemyPopups(enemyStatusLog);
@@ -3164,7 +3206,7 @@ export default function HackRoguelike() {
   // balance-bot(scripts/balance-bot.mjs)用。DOM文言のscrapingだと脆いため、現在の画面判定に必要な生の状態をそのまま公開する(devのみ)
   if (import.meta.env.DEV) {
     window.__abyssDebug = {
-      scene, floor, player, stats, enemy, equip, cds, turnPending, buildResonance,
+      scene, floor, kills, player, stats, enemy, equip, cds, turnPending, buildResonance, defeatFx,
       pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices, awakeningChoices, obsessionChoices,
       drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
     };
@@ -3261,7 +3303,7 @@ export default function HackRoguelike() {
       <p style={{ color: "#a8a29e", fontSize: 13, marginBottom: 6 }}>装備を拾い、ビルドを組み、どこまで潜れるか</p>
       <p style={{ color: "#57534e", fontSize: 12, marginBottom: 6 }}>5階ごとにボス出現・死んでも魂は残る</p>
       <p style={{ color: "#a8a29e", fontSize: 12, marginBottom: 28 }}>🎯 目標:20階の最終ボス撃破でクリア</p>
-      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.52 — 防御・棘共鳴</p>
+      <p style={{ color: "#b45309", fontSize: 12, marginBottom: 16, fontWeight: 700 }}>Ver.53 — 敵撃破演出を追加</p>
       {best > 0 && <p style={{ color: "#fbbf24", fontSize: 13, marginBottom: 8 }}>🏆 最高到達：{best}F{best >= FINAL_FLOOR ? " ⭐CLEAR" : ""}</p>}
       <p style={{ color: "#c4b5fd", fontSize: 13, marginBottom: 16 }}>👻 深淵の魂:{meta.souls}</p>
       <button onClick={() => { setPendingAscension([]); setScene("classSelect"); }} style={{ ...btnStyle(false), flex: "none", padding: "14px 48px", fontSize: 16, marginBottom: 10 }}>挑戦する</button>
@@ -4000,6 +4042,10 @@ export default function HackRoguelike() {
         @keyframes abyss-popup-pop-big { 0% { transform: translate(-50%,0) scale(.6); opacity: 1; } 40% { transform: translate(-50%,-14px) scale(1.35); } 100% { transform: translate(-50%,-46px) scale(1.05); opacity: 0; } }
         @keyframes abyss-popup-fade { 0% { opacity: 1; } 100% { opacity: 0; } }
         @keyframes abyss-shake-catastrophic { 0%,100% { transform: translateX(0); } 15% { transform: translateX(-9px); } 30% { transform: translateX(9px); } 45% { transform: translateX(-7px); } 60% { transform: translateX(7px); } 75% { transform: translateX(-3px); } 90% { transform: translateX(3px); } }
+        /* 撃破演出(TASK-015): 敵アイコンの縮小フェード・一撃撃破の一度だけの拡大からの崩壊・「撃破」ラベルの短いポップ */
+        @keyframes abyss-defeat-icon { 0% { transform: scale(1); opacity: 1; } 40% { transform: scale(.82); opacity: .7; } 100% { transform: scale(.55); opacity: 0; } }
+        @keyframes abyss-defeat-icon-oneshot { 0% { transform: scale(1); opacity: 1; } 18% { transform: scale(1.22); opacity: 1; } 45% { transform: scale(.8); opacity: .75; } 100% { transform: scale(.5); opacity: 0; } }
+        @keyframes abyss-defeat-label { 0% { transform: translate(-50%,-50%) scale(.6); opacity: 0; } 30% { transform: translate(-50%,-50%) scale(1.05); opacity: 1; } 70% { transform: translate(-50%,-50%) scale(1); opacity: 1; } 100% { transform: translate(-50%,-50%) scale(1); opacity: 0; } }
         @media (prefers-reduced-motion: reduce) {
           .abyss-animated { animation: none !important; }
         }
@@ -4153,6 +4199,7 @@ export default function HackRoguelike() {
             hitFxAnimation={enemyHitFx > 0 ? (enemyHitCatastrophic ? "abyss-shake-catastrophic 0.5s ease-in-out" : `${enemyHitFx % 2 === 0 ? "abyss-shake-b" : "abyss-shake-a"} 0.35s ease-in-out`) : "none"}
             popups={enemyPopups}
             executionCount={isHeavyCounterplayEnemy(enemy) ? executionCountdown(enemy) : null}
+            defeatFx={defeatFx ? { ...defeatFx, reduced: reducedFx } : null}
             intentPanel={intentPanel}
             rhythmChip={rhythmChip}
           />
@@ -4215,7 +4262,7 @@ export default function HackRoguelike() {
           const caption = damagePreviewCaption("attack");
           return (
             <CombatActionButton
-              testId="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")}
+              testId="attack-button" onClick={() => performAttack({ mult: 1, hits: 1 }, "攻撃")} disabled={!!defeatFx}
               accent={COMBAT_TONES.attack.strong} label="⚔️ 攻撃"
               primaryValue={`予想 ${range.min}〜${range.max}`} primaryTestId="attack-damage-preview"
               secondaryCaption={caption || null} secondaryTone={previewPlayerAction(enemy, "attack").multiplier > 1 ? "#fde047" : "#fca5a5"}
@@ -4224,7 +4271,7 @@ export default function HackRoguelike() {
           );
         })()}
         {(() => {
-          const defendDisabled = stats.noDefend > 0 || player.petrified;
+          const defendDisabled = stats.noDefend > 0 || player.petrified || !!defeatFx;
           const interrupts = !defendDisabled && isHeavyCounterplay(enemy) && !!enemy.rhythmState?.parryReady;
           const threat = isHeavyCounterplayEnemy(enemy) && enemy?.intent && ["attack", "heavy", "venom", "flurry"].includes(enemy.intent);
           const est = threat ? estimateIntentDamage(enemy) : null;
@@ -4239,7 +4286,7 @@ export default function HackRoguelike() {
           );
         })()}
         <CombatActionButton
-          testId="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified}
+          testId="potion-button" onClick={usePotion} disabled={player.potions <= 0 || player.petrified || !!defeatFx}
           accent={COMBAT_TONES.heal.strong} label="🧪" primaryValue={`×${player.potions}`}
           ineffective={player.potions > 0 && !player.petrified && !previewPlayerAction(enemy, "heal").effective}
         />
@@ -4249,7 +4296,7 @@ export default function HackRoguelike() {
           {player.skills.map(k => {
             const s = SKILLS[k];
             const cd = cds[k] || 0;
-            const dis = cd > 0 || player.petrified;
+            const dis = cd > 0 || player.petrified || !!defeatFx;
             const category = s.status ? "status" : ["heal", "shield"].includes(s.kind) ? "heal" : ["guard", "parry"].includes(s.kind) ? "defend" : "skill";
             const range = !s.spec.kind ? directDamagePreview(s.spec, true, category, k) : null;
             const interrupts = !dis && willInterruptExecution(range, s.spec);
