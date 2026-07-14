@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
-  RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, FINAL_BOSSES, ALL_BOSSES, PERKS, SKILLS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, AWAKENINGS, AWAKENING_MAP, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
+  RARITIES, DIFFICULTIES, BLESSINGS, KEYSTONE_EXCLUDE, ORIGINS, MODIFIERS, ASCENSIONS, ASCENSION_MAP, computeAscensionFx, getMod, ZONES, DREAM_BUFFS, SKILL_CAP, ABILITIES, ABILITY_MAP, ABILITY_CHANCE, ABILITY_TAGS, SKILL_MODS, CLASS_VARIANTS, META_UPGRADES, AFFIX_POOL, SLOTS, SLOT_KEYS, PREFIXES, CURSES, CURSE_CHANCE, CURSE_BOOST, ELITE_TRAITS, ELITE_TRAIT_KEYS, GIMMICKS, ENEMIES, BOSS_POOLS, FINAL_BOSSES, ALL_BOSSES, PERKS, SKILLS, SKILL_TAGS, STATUS, CLASSES, TREES, RELIC_CAP, RELICS, RELIC_MAP, RELIC_TAGS, AWAKENINGS, AWAKENING_MAP, OBSESSIONS, OBSESSION_MAP, OBSESSION_AFFIX_BIAS, ORIGIN_OBSESSION, CLASS_OBSESSION, OBSESSION_AWAKENING, FINAL_FLOOR, DIFF_RAMP_FLOORS, BOSS_PATTERNS, INTENTS, STAT_LABELS, PCT_KEYS, LOG_COLORS,
 } from "./game/data.js";
 import { SFX, setSfxMuted, setSfxVolume } from "./game/sfx.js";
 import { playBgm, setBgmMuted, setBgmVolume } from "./game/bgm.js";
@@ -49,6 +49,8 @@ const ascFx = (key, def = 1) => ACTIVE_ASCENSION_FX[key] ?? def;
 let ACTIVE_ZONE = ZONES.entrance;
 
 let ACTIVE_ORIGIN_BIAS = []; // 出自によるドロップ傾向(スマートルート)
+
+let ACTIVE_OBSESSION = null; // 執着ビルド(3F到達時に1つだけ選ぶ)のキー。装備アフィックス・固有能力抽選の優先に使う
 
 const getSkillCd = (key, mods) => {
   const mod = mods?.[key];
@@ -104,12 +106,14 @@ function genItem(floor, minRarity = 0, forceSlot = null, forceRarity = null, opt
   else if (slot === "boots") { stats.double = Math.round((4 + rand(0, 3)) * rarity.mult); stats.hp = Math.round(3 * m); }
   else if (slot === "ring") { const k = pick(["crit", "critDmg"]); stats[k] = Math.round((k === "critDmg" ? 14 : 5) * rarity.mult); }
   else if (slot === "amulet") { if (Math.random() < 0.5) stats.lifesteal = Math.round((3 + rand(0, 2)) * rarity.mult); else stats.hp = Math.round(9 * m); }
-  // 追加アフィックス(スマートルート:ゾーン・出自の系統に45%で寄せる)
+  // 追加アフィックス(スマートルート:ゾーン・出自の系統に45%で寄せる。執着ビルドの系統はさらに優先して70%で寄せる)
   const biasKeys = [...(ACTIVE_ZONE.affixBias || []), ...ACTIVE_ORIGIN_BIAS];
+  const obsessionBiasKeys = ACTIVE_OBSESSION ? (OBSESSION_AFFIX_BIAS[ACTIVE_OBSESSION] || []) : [];
   const shuffled = [...AFFIX_POOL].sort(() => Math.random() - 0.5);
   for (let i = 0; i < rarity.affixes; i++) {
     let a = shuffled[i];
-    if (biasKeys.length && Math.random() < 0.45) a = AFFIX_POOL.find(x => x.key === pick(biasKeys)) || a;
+    if (obsessionBiasKeys.length && Math.random() < 0.7) a = AFFIX_POOL.find(x => x.key === pick(obsessionBiasKeys)) || a;
+    else if (biasKeys.length && Math.random() < 0.45) a = AFFIX_POOL.find(x => x.key === pick(biasKeys)) || a;
     const v = Math.round(a.base * (1 + floor * 0.1) * (0.8 + Math.random() * 0.6));
     stats[a.key] = (stats[a.key] || 0) + v;
   }
@@ -119,10 +123,11 @@ function genItem(floor, minRarity = 0, forceSlot = null, forceRarity = null, opt
     curse = pick(CURSES).key;
     for (const k of Object.keys(stats)) stats[k] = Math.round(stats[k] * CURSE_BOOST);
   }
-  // 固有能力の抽選(レアリティが高いほど付きやすい。強化の影響を受けない別枠)
+  // 固有能力の抽選(レアリティが高いほど付きやすい。強化の影響を受けない別枠)。執着ビルドの系統に合う能力があれば60%で優先する
   let ability = null;
   if (opts.allowAbility !== false && Math.random() < (ABILITY_CHANCE[rIdx] || 0)) {
-    ability = pick(ABILITIES);
+    const obsessionAbilities = ACTIVE_OBSESSION ? ABILITIES.filter(a => (ABILITY_TAGS[a.key] || []).includes(ACTIVE_OBSESSION)) : [];
+    ability = obsessionAbilities.length && Math.random() < 0.6 ? pick(obsessionAbilities) : pick(ABILITIES);
   }
   const baseName = pick(SLOTS[slot].names);
   const prefix = curse ? "呪われた" : rIdx >= 1 ? pick(PREFIXES.slice(2)) : "";
@@ -298,16 +303,80 @@ const AWAKENING_CONDITIONS = {
   relicengine: () => true,
 };
 
-// 条件を満たす覚醒から最大3つ(重複なし)。3つ未満なら残りをランダムに補って必ず3つにする
+// 条件を満たす覚醒から最大3つ(重複なし)。3つ未満なら残りをランダムに補って必ず3つにする。
+// 執着ビルドと対応する覚醒が条件を満たしているなら、それを優先的に1枠含める(条件を満たさない覚醒は無理に出さない)
 function candidateAwakenings(p, st, eq) {
   const eligible = AWAKENINGS.filter(a => AWAKENING_CONDITIONS[a.key]?.(p, st, eq));
-  const poolKeys = eligible.sort(() => Math.random() - 0.5).slice(0, 3).map(a => a.key);
+  const obsessionKey = OBSESSION_AWAKENING[p.buildObsession];
+  const preferred = obsessionKey ? eligible.find(a => a.key === obsessionKey) : null;
+  const poolKeys = preferred ? [preferred.key] : [];
+  const restEligible = eligible.filter(a => a.key !== preferred?.key).sort(() => Math.random() - 0.5);
+  for (const a of restEligible) {
+    if (poolKeys.length >= 3) break;
+    poolKeys.push(a.key);
+  }
   if (poolKeys.length < 3) {
     const rest = AWAKENINGS.filter(a => !poolKeys.includes(a.key)).sort(() => Math.random() - 0.5);
     for (const a of rest) {
       if (poolKeys.length >= 3) break;
       poolKeys.push(a.key);
     }
+  }
+  return poolKeys.sort(() => Math.random() - 0.5);
+}
+
+// 未習得スキルからランダム3択。執着ビルドと対応するスキルがあれば最低1つ含める(重複なし・通常抽選へのフォールバックあり)
+function rollSkillChoices(learnable) {
+  const shuffled = [...learnable].sort(() => Math.random() - 0.5);
+  let choices = shuffled.slice(0, 3);
+  if (ACTIVE_OBSESSION) {
+    const tagged = learnable.filter(k => (SKILL_TAGS[k] || []).includes(ACTIVE_OBSESSION));
+    if (tagged.length && !choices.some(k => tagged.includes(k))) {
+      const forced = pick(tagged);
+      choices = [forced, ...choices.filter(k => k !== forced)].slice(0, 3);
+    }
+  }
+  return choices;
+}
+
+// 未所持レリックからランダム3択。執着ビルドと対応するレリックがあれば最低1つ含める(重複なし・通常抽選へのフォールバックあり)
+function rollRelicChoices(ownedKeys) {
+  const owned = new Set(ownedKeys);
+  const pool = RELICS.filter(r => !owned.has(r.key));
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  let choices = shuffled.slice(0, 3);
+  if (ACTIVE_OBSESSION) {
+    const tagged = pool.filter(r => (RELIC_TAGS[r.key] || []).includes(ACTIVE_OBSESSION));
+    if (tagged.length && !choices.some(r => tagged.some(t => t.key === r.key))) {
+      const forced = pick(tagged);
+      choices = [forced, ...choices.filter(r => r.key !== forced.key)].slice(0, 3);
+    }
+  }
+  return choices.map(r => r.key);
+}
+
+// ===== 執着ビルド(3F到達時の3択) =====
+// 出自・クラス・装備の固有能力から「今回関連が深い系統」を推定する
+function relevantObsessionKeys(p, eq) {
+  const keys = new Set();
+  for (const k of ORIGIN_OBSESSION[p.origin] || []) keys.add(k);
+  for (const k of CLASS_OBSESSION[p.cls] || []) keys.add(k);
+  for (const slot of SLOT_KEYS) {
+    const it = eq?.[slot];
+    if (it?.ability) for (const k of ABILITY_TAGS[it.ability] || []) keys.add(k);
+  }
+  return [...keys].filter(k => OBSESSION_MAP[k]);
+}
+
+// 関連系統から最低1つを含め、残りをランダムに補って必ず3つ(重複なし)にする
+function candidateObsessions(p, eq) {
+  const relevant = relevantObsessionKeys(p, eq);
+  const forcedKey = relevant.length ? pick(relevant) : null;
+  const poolKeys = forcedKey ? [forcedKey] : [];
+  const rest = OBSESSIONS.filter(o => !poolKeys.includes(o.key)).sort(() => Math.random() - 0.5);
+  for (const o of rest) {
+    if (poolKeys.length >= 3) break;
+    poolKeys.push(o.key);
   }
   return poolKeys.sort(() => Math.random() - 0.5);
 }
@@ -356,7 +425,7 @@ function ItemCard({ item, label }) {
 }
 
 export default function HackRoguelike() {
-  const newPlayer = () => ({ level: 1, xp: 0, hp: 60, maxHp: 60, atk: 8, def: 2, crit: 10, critDmg: 150, lifesteal: 0, double: 0, potions: 3, gold: 0, skills: ["strike"], knownSkills: ["strike"], skillMods: {}, hooks: {}, variant: "a", cls: "warrior", fury: 0, combo: 0, resonance: 0, barrier: 0, killMomentum: 0, tree: [], sp: 0, ap: 1, baseThorns: 0, relics: [], awakening: null }); // ap:1 — 初期覚醒Pで最初のボス前にクラスアビリティを1つ選べる。awakening:null — 深淵覚醒(10Fボス撃破後に1つだけ選ぶ・ラン限定)
+  const newPlayer = () => ({ level: 1, xp: 0, hp: 60, maxHp: 60, atk: 8, def: 2, crit: 10, critDmg: 150, lifesteal: 0, double: 0, potions: 3, gold: 0, skills: ["strike"], knownSkills: ["strike"], skillMods: {}, hooks: {}, variant: "a", cls: "warrior", fury: 0, combo: 0, resonance: 0, barrier: 0, killMomentum: 0, tree: [], sp: 0, ap: 1, baseThorns: 0, relics: [], awakening: null, buildObsession: null, rerollsLeft: 0 }); // ap:1 — 初期覚醒Pで最初のボス前にクラスアビリティを1つ選べる。awakening:null — 深淵覚醒(10Fボス撃破後に1つだけ選ぶ・ラン限定)。buildObsession:null/rerollsLeft:0 — 執着ビルド(3F到達時に1つだけ選ぶ・ラン限定)
   const [scene, setScene] = useState("title");
   const [player, setPlayer] = useState(newPlayer());
   const [equip, setEquip] = useState({ weapon: null, armor: null, helmet: null, boots: null, ring: null, amulet: null });
@@ -374,6 +443,7 @@ export default function HackRoguelike() {
   const [relicGot, setRelicGot] = useState(null);
   const [relicChoices, setRelicChoices] = useState([]);
   const [awakeningChoices, setAwakeningChoices] = useState([]);
+  const [obsessionChoices, setObsessionChoices] = useState([]);
   const [skillChoices, setSkillChoices] = useState([]);
   const [pendingKill, setPendingKill] = useState(null);
   const [pendingClass, setPendingClass] = useState(null);
@@ -570,6 +640,7 @@ export default function HackRoguelike() {
     PENDING_DEATHCURSE = false;
     const org = ORIGINS.find(o => o.key === originKey) || null;
     ACTIVE_ORIGIN_BIAS = org ? org.bias : [];
+    ACTIVE_OBSESSION = null;
     const cls = CLASSES[clsKey];
     let p = cls.base(newPlayer());
     p.cls = clsKey;
@@ -1329,12 +1400,11 @@ export default function HackRoguelike() {
     const relicChance = e.isBoss ? 1 : e.isElite ? (ACTIVE_MOD.eliteRelic || 0.18) : 0;
     if (relicChance > 0 && Math.random() < relicChance) {
       // Ver.39〜: ランダム1個ではなく、未所持から3択で選ぶ(ビルドを「組む」楽しさを出す)
-      const owned = new Set(np.relics || []);
-      const pool = RELICS.filter(r => !owned.has(r.key)).sort(() => Math.random() - 0.5).slice(0, 3);
+      const pool = rollRelicChoices(np.relics || []);
       if (pool.length) {
         setPlayer(np); // ゴールド/XP等はここで確定させる
         setPendingKill(e);
-        setRelicChoices(pool.map(r => r.key));
+        setRelicChoices(pool);
         SFX.relic();
         setScene("relicChoice");
         return;
@@ -1459,6 +1529,16 @@ export default function HackRoguelike() {
       setPlayer(p => ({ ...p, hp: Math.min(stats.maxHp, p.hp + fh) }));
       addLog(`💧 水脈の癒し (+${fh} HP)`, "heal");
     }
+    // 執着ビルド:3F到達時、通常進行へ入る前に1回だけ3択を挟む
+    if (nf === 3 && !player.buildObsession) {
+      setObsessionChoices(candidateObsessions(player, equip));
+      setScene("obsessionChoice");
+      return;
+    }
+    resolveFloorEntry(nf);
+  };
+
+  const resolveFloorEntry = (nf) => {
     if (nf % 5 === 0) {
       const e = genEnemy(nf); e.hp = e.maxHp;
       if (stats.startStun > 0) { applyStatus(e, "stun", 1); addLog(`⏱️ 時が砕け、${e.name}は動けない！`, "info"); } // 時砕きの懐中時計
@@ -1500,6 +1580,17 @@ export default function HackRoguelike() {
     if (!finalExtras.some(r => r.key === "elite")) setEliteTraitPreview(null);
     setPathOptions([ROOMS[0], ...finalExtras].sort(() => Math.random() - 0.5));
     setScene("path");
+  };
+
+  // 執着ビルドの選択(強制・見送りなし。ラン中1回のみ)。リロール3回もここで付与する
+  const chooseObsession = (key) => {
+    const o = OBSESSION_MAP[key];
+    ACTIVE_OBSESSION = key;
+    setPlayer(p => ({ ...p, buildObsession: key, rerollsLeft: 3 }));
+    setObsessionChoices([]);
+    addLog(`🧭 今回の執着は『${o.name}』に定まった`, "gold");
+    addLog(`関連する装備・スキル・レリックが現れやすくなる`, "info");
+    resolveFloorEntry(floor);
   };
 
   const chooseZone = (zk) => {
@@ -1592,7 +1683,7 @@ export default function HackRoguelike() {
         nextFloor();
         return;
       }
-      setSkillChoices([...learnable].sort(() => Math.random() - 0.5).slice(0, 3));
+      setSkillChoices(rollSkillChoices(learnable));
       setScene("dojo");
       return;
     }
@@ -2693,6 +2784,39 @@ export default function HackRoguelike() {
   };
   const skipDrop = () => { setDrop(null); nextFloor(); };
 
+  // 執着ビルドのリロール(ラン共有3回)。候補を再生成するだけで、階数や撃破報酬は一切再実行しない
+  const rerollLoot = () => {
+    if (!drop || (player.rerollsLeft || 0) <= 0) return;
+    setPlayer(p => ({ ...p, rerollsLeft: (p.rerollsLeft || 0) - 1 }));
+    setDrop(genItem(floor, drop.rarity >= 1 ? 1 : 0, null, null, { unidentified: drop.identified === false }));
+    addLog(`🔀 再抽選した(残り${(player.rerollsLeft || 0) - 1}回)`, "info");
+  };
+  const rerollSkillChoices = () => {
+    if ((player.rerollsLeft || 0) <= 0) return;
+    setPlayer(p => ({ ...p, rerollsLeft: (p.rerollsLeft || 0) - 1 }));
+    const known = player.knownSkills || player.skills;
+    const learnable = Object.entries(SKILLS).filter(([k, s]) => !known.includes(k) && (!s.locked || metaOwned("skill_" + k) > 0)).map(([k]) => k);
+    let next = rollSkillChoices(learnable);
+    if (JSON.stringify([...next].sort()) === JSON.stringify([...skillChoices].sort())) next = rollSkillChoices(learnable);
+    setSkillChoices(next);
+    addLog(`🔀 再抽選した(残り${(player.rerollsLeft || 0) - 1}回)`, "info");
+  };
+  const rerollRelicChoices = () => {
+    if ((player.rerollsLeft || 0) <= 0) return;
+    setPlayer(p => ({ ...p, rerollsLeft: (p.rerollsLeft || 0) - 1 }));
+    let next = rollRelicChoices(player.relics || []);
+    if (JSON.stringify([...next].sort()) === JSON.stringify([...relicChoices].sort())) next = rollRelicChoices(player.relics || []);
+    setRelicChoices(next);
+    addLog(`🔀 再抽選した(残り${(player.rerollsLeft || 0) - 1}回)`, "info");
+  };
+  // 候補画面共通の「再抽選 残りX」ボタン(残り0では出さない)
+  const rerollButton = (onReroll) => (player.rerollsLeft || 0) > 0 && (
+    <button data-testid="reroll-button" onClick={onReroll}
+      style={{ background: "#1c1917", border: "1px solid #2dd4bf", color: "#2dd4bf", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, marginBottom: 8 }}>
+      🔀 再抽選 残り{player.rerollsLeft}
+    </button>
+  );
+
   const identifyPrice = Math.round((20 + floor * 10) * (1 - (stats.shopDiscount || 0) / 100));
   const identifyDrop = () => {
     if (!drop || drop.identified !== false || player.gold < identifyPrice) return;
@@ -2850,6 +2974,14 @@ export default function HackRoguelike() {
             </div>
           );
         })()}
+        {(player.buildObsession || (player.rerollsLeft || 0) > 0) && (
+          <div style={{ textAlign: "center", fontSize: 12, marginBottom: 10, color: "#a8a29e" }}>
+            {player.buildObsession && OBSESSION_MAP[player.buildObsession] && (
+              <span style={{ marginRight: 10 }}>執着: {OBSESSION_MAP[player.buildObsession].icon} {OBSESSION_MAP[player.buildObsession].name}</span>
+            )}
+            {(player.rerollsLeft || 0) > 0 && <span>再抽選: {player.rerollsLeft}</span>}
+          </div>
+        )}
         {player.awakening && AWAKENING_MAP[player.awakening] && (
           <div style={{ marginBottom: 14 }}>
             <div style={{ color: "#818cf8", fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🌌 深淵覚醒</div>
@@ -2936,7 +3068,7 @@ export default function HackRoguelike() {
   if (import.meta.env.DEV) {
     window.__abyssDebug = {
       scene, floor, player, stats, enemy, equip, cds, turnPending,
-      pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices, awakeningChoices,
+      pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices, awakeningChoices, obsessionChoices,
       drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
     };
     if (window.__abyssTestFast === true) {
@@ -2952,7 +3084,7 @@ export default function HackRoguelike() {
         },
         patchPlayer: (patch) => setPlayer(current => ({
           ...current,
-          ...selectPatch(patch, ["hp", "atk", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance", "defendedLast", "heavyRiposte", "skills", "awakening", "relics", "lifesteal"]),
+          ...selectPatch(patch, ["hp", "atk", "potions", "quickDrinkUsed", "autoPotionLeft", "cls", "variant", "crit", "double", "def", "fury", "combo", "resonance", "defendedLast", "heavyRiposte", "skills", "awakening", "relics", "lifesteal", "origin", "buildObsession", "rerollsLeft", "knownSkills"]),
         })),
         patchEnemy: (patch) => setEnemy(current => current ? {
           ...current,
@@ -3313,6 +3445,7 @@ export default function HackRoguelike() {
       {statusOverlay}{statusFab}
       <p style={{ color: "#c084fc", fontSize: 13, fontWeight: 700, textAlign: "center", marginBottom: 4 }}>✨ レリックを発見！</p>
       <p style={{ color: "#a8a29e", fontSize: 12, textAlign: "center", marginBottom: 14 }}>1つ選んで持ち帰る(永続効果・所持枠 {(player.relics || []).length}/{RELIC_CAP})</p>
+      <div style={{ textAlign: "center" }}>{rerollButton(rerollRelicChoices)}</div>
       {relicChoices.map(rk => {
         const r = RELIC_MAP[rk];
         return (
@@ -3328,6 +3461,25 @@ export default function HackRoguelike() {
   );
 
   // ===== 深淵覚醒(10Fボス撃破後の3択・強制選択・レリック画面と同じ見た目を再利用) =====
+  // ===== 執着ビルド(3F到達時の3択・強制選択・レリック画面と同じ見た目を再利用) =====
+  if (scene === "obsessionChoice" && obsessionChoices.length > 0) return (
+    <div style={wrap} data-testid="obsession-choice-scene">
+      {statusOverlay}{statusFab}
+      <p style={{ color: "#2dd4bf", fontSize: 13, fontWeight: 700, textAlign: "center", marginBottom: 4 }}>🧭 執着ビルド</p>
+      <p style={{ color: "#a8a29e", fontSize: 12, textAlign: "center", marginBottom: 14 }}>今回このランで狙う系統を1つだけ選べる(ラン中1回限り)</p>
+      {obsessionChoices.map(ok => {
+        const o = OBSESSION_MAP[ok];
+        return (
+          <button key={ok} data-testid={`obsession-choice-${ok}`} onClick={() => chooseObsession(ok)}
+            style={{ display: "block", width: "100%", textAlign: "left", background: "#161210", border: "1px solid #2dd4bf", boxShadow: "0 0 14px rgba(45,212,191,0.3)", borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer", color: "#e7e5e4", fontFamily: "inherit" }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: "#2dd4bf" }}>{o.icon} {o.name}</div>
+            <div style={{ fontSize: 13, color: "#a8a29e" }}>{o.desc}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   if (scene === "awakeningChoice" && awakeningChoices.length > 0) return (
     <div style={wrap} data-testid="awakening-choice-scene">
       {statusOverlay}{statusFab}
@@ -3366,6 +3518,7 @@ export default function HackRoguelike() {
         <h2 style={{ color: "#fbbf24", textAlign: "center", fontSize: 20, fontWeight: 800 }}>📖 {floor}F — 修練の間</h2>
         <p style={{ textAlign: "center", color: "#a8a29e", fontSize: 13, marginBottom: 4 }}>老師範が技を見せてくれる。学ぶのは1つだけだ</p>
         <p style={{ textAlign: "center", color: "#78716c", fontSize: 12, marginBottom: 14 }}>習得枠 {known.length}/{SKILL_CAP}・スキル装備枠 {player.skills.length}/3</p>
+        <div style={{ textAlign: "center" }}>{rerollButton(rerollSkillChoices)}</div>
         {skillChoices.map(k => {
           const s = SKILLS[k];
           return (
@@ -3431,7 +3584,7 @@ export default function HackRoguelike() {
       <h2 style={{ color: "#fbbf24", textAlign: "center", fontSize: 20, fontWeight: 800 }}>✨ レベルアップ！ Lv{player.level}</h2>
       <p style={{ textAlign: "center", color: "#a8a29e", fontSize: 13, marginBottom: 16 }}>強化を1つ選んでください</p>
       {perkChoices.map(perk => (
-        <button key={perk.key} onClick={() => choosePerk(perk)}
+        <button key={perk.key} data-testid={`perk-choice-${perk.key}`} onClick={() => choosePerk(perk)}
           style={{ display: "block", width: "100%", textAlign: "left", background: "#161210", border: "1px solid #44403c", borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer", color: "#e7e5e4", fontFamily: "inherit" }}>
           <div style={{ fontWeight: 700, fontSize: 15, color: "#fbbf24" }}>{perk.name}</div>
           <div style={{ fontSize: 13, color: "#a8a29e" }}>{perk.desc}</div>
@@ -3448,6 +3601,7 @@ export default function HackRoguelike() {
       <div style={wrap}>
       {statusOverlay}{statusFab}
         <h2 style={{ color: "#fbbf24", textAlign: "center", fontSize: 20, fontWeight: 800 }}>💰 戦利品ドロップ！</h2>
+        <div style={{ textAlign: "center" }}>{rerollButton(rerollLoot)}</div>
         <div style={{ display: "flex", gap: 10, margin: "16px 0" }}>
           <ItemCard item={drop} label="NEW" />
           {current ? <ItemCard item={current} label="装備中" /> : (

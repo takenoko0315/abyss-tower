@@ -554,6 +554,82 @@ export const RELICS = [
 
 export const RELIC_MAP = Object.fromEntries(RELICS.map(r => [r.key, r]));
 
+// ===== 執着ビルド(3F到達時に1つだけ選ぶ・ラン限定)。深淵覚醒への到達を運任せにせず、
+// 選んだ系統に沿った装備・スキル・レリックが出やすくなるようにする =====
+export const OBSESSIONS = [
+  { key: "poison", icon: "☣️", name: "毒", desc: "毒威力・状態異常特効の装備やスキル・レリックが出やすくなる" },
+  { key: "burn", icon: "🔥", name: "炎", desc: "炎威力・状態異常特効の装備やスキル・レリックが出やすくなる" },
+  { key: "bleed", icon: "🩸", name: "出血", desc: "出血威力・クリ率の装備やスキル・レリックが出やすくなる" },
+  { key: "multi", icon: "🌀", name: "連撃", desc: "連撃率・ヒット毎回復の装備やスキル・レリックが出やすくなる" },
+  { key: "crit", icon: "💥", name: "会心", desc: "クリ率・クリ倍率の装備やスキル・レリックが出やすくなる" },
+  { key: "guard", icon: "🛡️", name: "防御・棘", desc: "防御力・HP・棘・防御後火力の装備やスキル・レリックが出やすくなる" },
+  { key: "blood", icon: "🧛", name: "吸血・障壁", desc: "吸血・HP・ヒット毎回復の装備やスキル・レリックが出やすくなる" },
+  { key: "skill", icon: "🔮", name: "スキル", desc: "対状態異常・各種威力アフィックスの装備やスキル・レリックが出やすくなる" },
+];
+
+export const OBSESSION_MAP = Object.fromEntries(OBSESSIONS.map(o => [o.key, o]));
+
+// 執着系統ごとの優先アフィックスキー(genItemの追加アフィックス抽選で70%程度優先される)
+export const OBSESSION_AFFIX_BIAS = {
+  poison: ["poisonPower", "dmgVsStatus"],
+  burn: ["burnPower", "dmgVsStatus"],
+  bleed: ["bleedPower", "crit"],
+  multi: ["double", "perHitHeal"],
+  crit: ["crit", "critDmg"],
+  guard: ["def", "hp", "thorns", "afterDefendDmg"],
+  blood: ["lifesteal", "hp", "perHitHeal"],
+  skill: ["dmgVsStatus", "burnPower", "poisonPower", "bleedPower"],
+};
+
+// 出自・クラスから「今回関連が深い執着系統」を推定するための対応表(執着3択の最低1枠確保に使う)
+export const ORIGIN_OBSESSION = {
+  venom: ["poison"], cinder: ["burn"], bloodblade: ["bleed"],
+  thorn: ["guard"], guardian: ["guard"], alchemy: ["guard"],
+  blood: ["blood"], arcanist: ["skill"],
+  royal: ["crit"], chaos: ["crit"], shadow: ["crit", "multi"], swift: ["multi", "crit"],
+};
+export const CLASS_OBSESSION = {
+  assassin: ["multi", "crit"], mage: ["skill"], vampire: ["blood"],
+};
+
+// 既存ABILITIES/SKILLS/RELICSへ推測で新設せず、既存キーにだけ執着タグを付ける
+export const ABILITY_TAGS = {
+  scythe: ["poison"], plague: ["poison"], critvenom: ["poison", "crit"], thornqueen: ["guard", "poison"],
+  cinder: ["burn"],
+  gash: ["bleed"], scarcrit: ["bleed", "crit"],
+  rampage: ["multi", "crit"],
+  executioner: ["crit"], lightning: ["crit"], magicbullet: ["skill", "crit"], battleresonance: ["crit"],
+  shackle: ["guard"], iceheart: ["guard"], briar: ["guard"], immovable: ["guard"], meteorite: ["guard"],
+  windrun: ["guard"], dragonscale: ["guard"], ironthorn: ["guard"], reflector: ["guard"], keeneye: ["guard"], icearmor: ["guard"],
+  souleater: ["blood"],
+  stargazer: ["skill"],
+};
+
+export const SKILL_TAGS = {
+  poisonblade: ["poison"], flamestrike: ["burn"], laceration: ["bleed"],
+  flurry: ["multi"], truestrike: ["crit"],
+  ironguard: ["guard"], deflect: ["guard"],
+  bloodblade: ["blood"], healchant: ["blood"], barrierchant: ["blood"],
+};
+
+export const RELIC_TAGS = {
+  venom: ["poison"], snake: ["poison"],
+  ember: ["burn"], salamander: ["burn"],
+  bloodring: ["bleed"], crimsonblade: ["bleed"],
+  feather: ["multi"], snowballblade: ["multi"], critripple: ["multi", "crit"], leech: ["multi", "blood"],
+  blade: ["crit"], execaxe: ["crit"], momentum: ["crit", "skill"], bloodthorn: ["crit", "guard"],
+  heart: ["guard"], shell: ["guard"], bulwark: ["guard"], avenger: ["guard"], abyssring: ["guard"], fairydust: ["guard"],
+  chalice: ["blood"], phoenix: ["blood"], bloodtear: ["blood"],
+  sage: ["skill"],
+  hunter: ["poison", "burn", "bleed", "skill"],
+};
+
+// 執着系統に対応する深淵覚醒(条件を満たしている場合のみ優先候補に含める。無理に出さない)
+export const OBSESSION_AWAKENING = {
+  poison: "plaguecore", burn: "cindercore", bleed: "bloodterminal",
+  multi: "infiniteblade", skill: "manaOverload", blood: "bloodvat",
+};
+
 // ===== 深淵覚醒(10Fボス撃破後に1つだけ選ぶ・ラン限定・レリック所持枠には含めない) =====
 // バランスを取るための仕組みではなく、ビルドが噛み合うと明確に壊れる体験を作るための強力な効果。
 export const AWAKENINGS = [
