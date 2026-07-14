@@ -31,6 +31,7 @@ import {
 import { initializeRhythm, previewPlayerAction, resolveEnemyRhythmAction, resolvePlayerRhythmAction, rhythmFor } from "./game/combatRhythm.js";
 import { applySandboxFinalMultipliers, createSandboxEquipment, normalizeSandboxCount, normalizeSandboxMultiplier, SANDBOX_MULTIPLIERS, SANDBOX_PRESETS, sandboxSkillsFor } from "./game/combatSandbox.js";
 import { clampTier, DAMAGE_POPUP_TIERS, damagePopupAnimation, damagePopupColor, damagePopupGlow, damagePopupVisual, getDamagePopupTier, getPlayerDamagePopupTier, scaleHitsForPopup } from "./game/damagePresentation.js";
+import { collectBuildResonance, RESONANCE_SYSTEMS } from "./game/buildResonance.js";
 import Bar from "./components/Bar.jsx";
 import EnemyCombatCard from "./components/EnemyCombatCard.jsx";
 import EnemyIntentPanel from "./components/EnemyIntentPanel.jsx";
@@ -290,6 +291,20 @@ function totalStats(player, equip) {
   return t;
 }
 
+// ===== 系統共鳴(装備・スキル・レリック・出自・執着の噛み合い度で解禁されるルール級効果) =====
+const RESONANCE_META = {
+  poison: { icon: "☣️", name: "毒", tier1: "毒ダメージ+50%", tier2: "毒ダメージ発生時35%で追加発動" },
+  burn: { icon: "🔥", name: "炎", tier1: "炎上中の敵への直撃+30%", tier2: "炎上中の敵へ3ヒット毎に追加発動" },
+  bleed: { icon: "🩸", name: "出血", tier1: "出血中の敵へのクリ率+20%", tier2: "クリ時、出血ダメの50%を追加" },
+  multi: { icon: "🌀", name: "連撃", tier1: "2ヒット目以降、ヒットごとに+15%", tier2: "4ヒット以上で最後の一撃×3" },
+};
+const RESONANCE_NOTICE = {
+  poison: { 1: "☣️ 毒共鳴Ⅰが発動", 2: "☣️ 毒共鳴Ⅱ — 毒がもう一度牙を剥く" },
+  burn: { 1: "🔥 炎共鳴Ⅰが発動", 2: "🔥 炎共鳴Ⅱ — 業火が連鎖する" },
+  bleed: { 1: "🩸 出血共鳴Ⅰが発動", 2: "🩸 出血共鳴Ⅱ — 傷口から追い討ちが放たれる" },
+  multi: { 1: "🌀 連撃共鳴Ⅰが発動", 2: "🌀 連撃共鳴Ⅱ — 刃の連鎖が限界を超えた" },
+};
+
 // ===== 深淵覚醒(10Fボス撃破後の3択) =====
 // 候補資格の判定。「遺物炉心」は常にtrue(汎用覚醒・候補が3つ未満の時の補充にも使われる)
 const AWAKENING_CONDITIONS = {
@@ -495,6 +510,7 @@ export default function HackRoguelike() {
   }, []);
   const pendingTurnRef = useRef(null); // 演出待ちの敵ターン(連打時は即時フラッシュして解決する)
   const popupIdRef = useRef(0);
+  const resonanceNotifiedRef = useRef({}); // 系統共鳴: ラン中に段階が初めて有効になった時だけ通知するための既通知記録
   useEffect(() => { metaStorageLoad().then(m => { if (m) { setMeta({ best: 0, codex: { enemies: [], relics: [], abilities: [] }, codexRewards: [], ...m }); setBest(b => Math.max(b, m.best || 0)); if (m.muted) setMuted(true); if (m.reducedFx) setReducedFx(true); if (typeof m.bgmVolume === "number") setBgmVolumeState(m.bgmVolume); if (typeof m.sfxVolume === "number") setSfxVolumeState(m.sfxVolume); } }); }, []);
   useEffect(() => { setSfxMuted(muted); setBgmMuted(muted); }, [muted]);
   useEffect(() => { setBgmVolume(bgmVolume / 100); }, [bgmVolume]);
@@ -641,6 +657,7 @@ export default function HackRoguelike() {
     const org = ORIGINS.find(o => o.key === originKey) || null;
     ACTIVE_ORIGIN_BIAS = org ? org.bias : [];
     ACTIVE_OBSESSION = null;
+    resonanceNotifiedRef.current = {};
     const cls = CLASSES[clsKey];
     let p = cls.base(newPlayer());
     p.cls = clsKey;
@@ -838,6 +855,19 @@ export default function HackRoguelike() {
   };
 
   const stats = totalStats(player, equip);
+  // 系統共鳴: 装備・スキル・レリック・出自・執着の噛み合い度(0〜6点/系統)。純粋関数側で古い状態にも耐性がある
+  const buildResonance = collectBuildResonance({ player, equip, skills: player.skills, relics: player.relics, origin: player.origin });
+  // 段階が初めて有効になった時だけ通知する(毎ターンの重複ログを防ぐ)
+  useEffect(() => {
+    for (const system of RESONANCE_SYSTEMS) {
+      const level = buildResonance[system].level;
+      if (level > 0 && level > (resonanceNotifiedRef.current[system] || 0)) {
+        const notice = RESONANCE_NOTICE[system]?.[level];
+        if (notice) addLog(notice, "gold");
+        resonanceNotifiedRef.current[system] = level;
+      }
+    }
+  }, [buildResonance.poison.level, buildResonance.burn.level, buildResonance.bleed.level, buildResonance.multi.level]);
 
   // 現在の与ダメ倍率を可視化するための計算(performAttackの乗算条件と同じ式を使い、実際の数値とズレないようにする)
   // RNG要素(会心判定・回避・気まぐれ系のランダム倍率)は除外し、「今確実にかかっている補正」だけを対象にする
@@ -1013,9 +1043,15 @@ export default function HackRoguelike() {
         const label = event.source === "poison" ? "毒" : event.source === "bleed" ? "出血" : "炎上";
         addLog(`${icon} ${e.name}は${label}で${event.value}ダメージ`, "dmg");
         if (enemyStatusLog) enemyStatusLog.push({ dmg: event.value, status: event.source }); // 状態異常ポップ用(TASK-010)
+        // 毒共鳴Ⅱ: 毒ダメージが発生するたび35%でもう一度同じダメージ(残りターンは減らさず、追加発動からは再抽選しない)
+        if (event.source === "poison" && e.hp > 0 && buildResonance.poison.level >= 2 && Math.random() < 0.35) {
+          e.hp -= event.value;
+          if (enemyStatusLog) enemyStatusLog.push({ dmg: event.value, status: "poison" });
+          addLog(`☣️ 毒共鳴Ⅱが発動！追加${event.value}ダメージ`, "dmg");
+        }
       }
     }
-    if (enemyEffects.stopReason === "enemyDead") return p; // 継続ダメージで撃破
+    if (e.hp <= 0) return p; // 継続ダメージ(毒共鳴Ⅱの追加分を含む)で撃破
     if (e.heavyCounterplayInterrupt) {
       e.counterplayOutcome = e.heavyCounterplayInterrupt;
       recordHeavyCounterplay(e, e.heavyCounterplayInterrupt === "damage" ? "damageInterrupts" : "ccInterrupts");
@@ -2197,6 +2233,16 @@ export default function HackRoguelike() {
         if (proc > 0) enemyRef.hp -= proc;
       }
     };
+    // 炎上ダメージ率(炎共鳴Ⅱ・深淵覚醒「紅蓮機関」で共用)。enemyTurnの炎上ティック計算と同じ式
+    const currentBurnRate = () => {
+      let r = hasNode(player, "m1") ? 0.11 : 0.06;
+      if (hasRelic(player, "burn")) r += 0.04;
+      r += ACTIVE_ZONE.burnBoost || 0;
+      r *= 1 + (stats.burnPower || 0) / 100;
+      return r;
+    };
+    // 毒共鳴Ⅰ: 毒ダメージ+50%(付与時の威力計算に加算する追加係数)
+    const poisonResonanceBonus = buildResonance.poison.level >= 1 ? 0.5 : 0;
     for (let i = 0; i < baseHits + bonus && e.hp > 0; i++) {
       // 深淵覚醒「無限刃」の安全策(二重防御): どんな経路でbonusが増えても1行動10ヒットで必ず打ち止め
       if (player.awakening === "infiniteblade" && i >= 10) break;
@@ -2210,7 +2256,9 @@ export default function HackRoguelike() {
         addLog(`🐺 ${e.name}が身をひるがえして回避した！`, "info");
         continue;
       }
-      const critChance = stats.crit + combo * 4;
+      // 出血共鳴Ⅰ: 出血中の敵へのクリ率+20%
+      const bleedResonanceCritBonus = buildResonance.bleed.level >= 1 && (e.status?.bleed?.turns || 0) > 0 ? 20 : 0;
+      const critChance = stats.crit + combo * 4 + bleedResonanceCritBonus;
       const isCrit = stats.noCrit > 0 ? false : (spec.forceCrit || furyRelease || (stats.critVsCC > 0 && enemyCCed()) || (player.cls === "assassin" && player.variant === "c" && combo >= 8) || (stats.skillAlwaysCrit > 0 && usedSkill) || (mod === "critMod" && usedSkill) || (stats.rampageCrit > 0 && i >= baseHits) || (hasNode(player, "w10") && p.tookHeavyLast) || (hasNode(player, "a9") && e.hp === e.maxHp) || Math.random() * 100 < critChance);
       if (isCrit) { critLanded = true; critCount++; }
       hitsDone++;
@@ -2244,6 +2292,10 @@ export default function HackRoguelike() {
       if (stats.gambleDmg > 0) mult *= Math.random() < 0.5 ? 1.5 : 0.7;   // 賭博師のコイン
       if (player.awakening === "relicengine") mult *= Math.pow(1.15, (player.relics || []).length); // 深淵覚醒「遺物炉心」: レリック1個につき与ダメ×1.15
       if (player.awakening === "bloodvat" && p.hp / stats.maxHp <= 0.35) mult *= 2; // 深淵覚醒「不死血槽」: HP35%以下で全与ダメ2倍
+      if (buildResonance.burn.level >= 1 && (e.status?.burn?.turns || 0) > 0) mult *= 1.3; // 炎共鳴Ⅰ: 炎上中の敵への直接ダメ+30%
+      const totalHitsNow = baseHits + bonus;
+      if (buildResonance.multi.level >= 1 && i > 0) mult *= 1 + i * 0.15; // 連撃共鳴Ⅰ: 2ヒット目以降、ヒットごとに+15%
+      if (buildResonance.multi.level >= 2 && totalHitsNow >= 4 && i === totalHitsNow - 1) mult *= 3; // 連撃共鳴Ⅱ: 4ヒット以上なら最後の一撃×3
       const dmg = calculateAttackDamage({
         attack: stats.atk,
         killMomentum: p.killMomentum || 0,
@@ -2268,14 +2320,20 @@ export default function HackRoguelike() {
       counterplayDirectDamage += dmg;
       // 深淵覚醒「紅蓮機関」: 炎上中の敵へ直接攻撃を当てるたび、炎上ダメージが即座にもう1回発生(1ヒットごと)
       if (player.awakening === "cindercore" && dmg > 0 && e.hp > 0 && (e.status?.burn?.turns || 0) > 0) {
-        let cinderRate = hasNode(player, "m1") ? 0.11 : 0.06;
-        if (hasRelic(player, "burn")) cinderRate += 0.04;
-        cinderRate += ACTIVE_ZONE.burnBoost || 0;
-        cinderRate *= 1 + (stats.burnPower || 0) / 100;
-        const cinderDmg = Math.max(1, Math.round(e.maxHp * cinderRate));
+        const cinderDmg = Math.max(1, Math.round(e.maxHp * currentBurnRate()));
         e.hp -= cinderDmg;
         totalDmg += cinderDmg;
         addLog(`🔥 紅蓮機関が発動！追加${cinderDmg}ダメージ`, "dmg");
+      }
+      // 炎共鳴Ⅱ: 炎上中の敵へ3ヒット当てるたび、現在の炎上ダメージを即座に1回発生。カウントは戦闘(この敵)ごとにリセット・追加炎上分からは増やさない
+      if (dmg > 0 && e.hp > 0 && (e.status?.burn?.turns || 0) > 0) {
+        e.burnResonanceHits = (e.burnResonanceHits || 0) + 1;
+        if (buildResonance.burn.level >= 2 && e.burnResonanceHits % 3 === 0) {
+          const resoBurnDmg = Math.max(1, Math.round(e.maxHp * currentBurnRate()));
+          e.hp -= resoBurnDmg;
+          totalDmg += resoBurnDmg;
+          addLog(`🔥 炎共鳴Ⅱが発動！追加${resoBurnDmg}ダメージ`, "dmg");
+        }
       }
       if (dmg > 0) hitLog.push({ dmg, crit: isCrit }); // ダメージポップ用(TASK-009)
       if (e.gimmick === "mirrorimg") e.mirrorStore = dmg; // 鏡霊:直前の一撃を記憶(次の敵ターンで跳ね返す)
@@ -2284,7 +2342,7 @@ export default function HackRoguelike() {
       if (hasNode(player, "a10") && e.status?.poison?.turns > 0) e.status.poison.turns += 1; // 毒霧の残滓
       if (isCrit) {
         if (stats.critPoison > 0 && e.hp > 0) { // 会心の刺
-          const pd = Math.max(1, Math.round(stats.atk * 0.25));
+          const pd = Math.max(1, Math.round(stats.atk * 0.25 * (1 + poisonResonanceBonus)));
           applyStatus(e, "poison", 2, pd);
           procPlagueCore(e);
           addLog(`🗡️ 会心の一撃が毒を刻んだ`, "dmg");
@@ -2300,6 +2358,14 @@ export default function HackRoguelike() {
           if (bleedProc > 0) {
             e.hp -= bleedProc;
             addLog(`🩸 血の終端が発動！出血ダメージ×2(${bleedProc})`, "dmg");
+          }
+        }
+        // 出血共鳴Ⅱ: クリティカル時、現在の出血ダメージの50%を追加ダメージ(血の終端とは独立に両方発動しうる。再帰なし)
+        if (buildResonance.bleed.level >= 2 && e.hp > 0 && (e.status?.bleed?.turns || 0) > 0) {
+          const resoBleedProc = Math.round((e.status.bleed.dmg || 0) * 0.5);
+          if (resoBleedProc > 0) {
+            e.hp -= resoBleedProc;
+            addLog(`🩸 出血共鳴Ⅱが発動！追加${resoBleedProc}ダメージ`, "dmg");
           }
         }
         if (stats.critGauge > 0) { // 闘気の共鳴:クリ命中でクラスゲージ+1
@@ -2403,7 +2469,7 @@ export default function HackRoguelike() {
       addLog(`🩸 改造[吸血]でHP+${h}`, "heal");
     }
     if (mod === "venomMod" && e.hp > 0) {
-      let pd = Math.max(1, Math.round(stats.atk * 0.35 * (1 + (stats.poisonPower || 0) / 100)));
+      let pd = Math.max(1, Math.round(stats.atk * 0.35 * (1 + (stats.poisonPower || 0) / 100 + poisonResonanceBonus)));
       applyStatus(e, "poison", 2, pd);
       procPlagueCore(e);
       addLog(`🟣 改造[猛毒]が${e.name}を蝕む！`, "dmg");
@@ -2423,7 +2489,7 @@ export default function HackRoguelike() {
     }
     // ユニーク: 亡者の大鎌(攻撃するたび毒)
     if (stats.alwaysPoison > 0 && e.hp > 0) {
-      let pd = Math.max(1, Math.round(stats.atk * 0.3 * (1 + (stats.poisonPower || 0) / 100)));
+      let pd = Math.max(1, Math.round(stats.atk * 0.3 * (1 + (stats.poisonPower || 0) / 100 + poisonResonanceBonus)));
       applyStatus(e, "poison", 2, pd);
       procPlagueCore(e);
       addLog(`🟣 大鎌の呪毒が${e.name}を蝕む…`, "dmg");
@@ -2448,7 +2514,7 @@ export default function HackRoguelike() {
     if (spec.applyStatus && e.hp > 0) {
       const s = spec.applyStatus;
       const powerKey = s.type + "Power"; // poisonPower / bleedPower など、種類に応じた威力アフィックスを参照
-      let dmg = s.dmgRatio ? Math.max(1, Math.round(stats.atk * s.dmgRatio * (1 + (stats[powerKey] || 0) / 100))) : 0;
+      let dmg = s.dmgRatio ? Math.max(1, Math.round(stats.atk * s.dmgRatio * (1 + (stats[powerKey] || 0) / 100 + (s.type === "poison" ? poisonResonanceBonus : 0)))) : 0;
       if ((s.type === "poison" || s.type === "bleed") && hasRelic(player, s.type)) dmg = Math.round(dmg * 1.6); // 猛毒の指輪・血の指輪
       let turns = s.type === "freeze" && hasNode(player, "m2") ? s.turns + 1 : s.turns;   // 絶対零度
       if (s.type === "freeze" && hasRelic(player, "freeze")) turns += 1;                  // 氷河の核
@@ -2464,7 +2530,7 @@ export default function HackRoguelike() {
     // クラス passive
     if (e.hp > 0) {
       if (player.cls === "assassin" && player.variant === "a" && critLanded) {
-        let pd = Math.round(stats.atk * 0.3 * (hasNode(player, "a2") ? 1.6 : 1) * (1 + (stats.poisonPower || 0) / 100));
+        let pd = Math.round(stats.atk * 0.3 * (hasNode(player, "a2") ? 1.6 : 1) * (1 + (stats.poisonPower || 0) / 100 + poisonResonanceBonus));
         if (hasRelic(player, "poison")) pd = Math.round(pd * 1.6); // 猛毒の指輪
         applyStatus(e, "poison", 3, Math.max(1, pd));
         procPlagueCore(e);
@@ -2982,6 +3048,24 @@ export default function HackRoguelike() {
             {(player.rerollsLeft || 0) > 0 && <span>再抽選: {player.rerollsLeft}</span>}
           </div>
         )}
+        {RESONANCE_SYSTEMS.some(sys => buildResonance[sys].score > 0) && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ color: "#2dd4bf", fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🔗 系統共鳴</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {RESONANCE_SYSTEMS.filter(sys => buildResonance[sys].score > 0).map(sys => {
+                const { score, level } = buildResonance[sys];
+                const meta = RESONANCE_META[sys];
+                const color = level === 2 ? "#fbbf24" : level === 1 ? "#c084fc" : "#78716c";
+                return (
+                  <div key={sys} data-testid={`resonance-${sys}`} data-level={level} style={{ background: "#161210", border: `1px solid ${color}`, borderRadius: 8, padding: "6px 10px", fontSize: 12 }}>
+                    <div style={{ color, fontWeight: 700 }}>{meta.icon} {meta.name}共鳴 {score} / 6</div>
+                    {level > 0 && <div style={{ color: "#a8a29e", marginTop: 2 }}>{level === 2 ? `共鳴Ⅱ: ${meta.tier2}` : `共鳴Ⅰ: ${meta.tier1}`}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {player.awakening && AWAKENING_MAP[player.awakening] && (
           <div style={{ marginBottom: 14 }}>
             <div style={{ color: "#818cf8", fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🌌 深淵覚醒</div>
@@ -3067,7 +3151,7 @@ export default function HackRoguelike() {
   // balance-bot(scripts/balance-bot.mjs)用。DOM文言のscrapingだと脆いため、現在の画面判定に必要な生の状態をそのまま公開する(devのみ)
   if (import.meta.env.DEV) {
     window.__abyssDebug = {
-      scene, floor, player, stats, enemy, equip, cds, turnPending,
+      scene, floor, player, stats, enemy, equip, cds, turnPending, buildResonance,
       pathOptions, blessingChoices, originChoices, zoneChoices, skillChoices, relicChoices, perkChoices, awakeningChoices, obsessionChoices,
       drop, shopItem, forgeSlot, currentEvent, events: EVENTS, meta,
     };
@@ -3090,6 +3174,8 @@ export default function HackRoguelike() {
           ...current,
           ...selectPatch(patch, ["name", "counterplay", "hp", "maxHp", "atk", "trait", "gimmick", "guardTurns", "status", "intent", "pattern", "patternIdx", "isBoss"]),
         } : current),
+        // slot(weapon/armor/helmet/boots/ring/amulet)ごとに{stats, ability}相当のアイテムをそのまま差し込む(系統共鳴テスト用)
+        patchEquip: (patch) => setEquip(current => ({ ...current, ...patch })),
         runEnemyTurn: () => {
           const nextEnemy = { ...enemy, status: enemy?.status ? { ...enemy.status } : undefined };
           const nextPlayer = enemyTurn({ ...player }, nextEnemy);
