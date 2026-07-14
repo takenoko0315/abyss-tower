@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectBuildResonance, getResonanceLevel } from "./buildResonance.js";
+import { collectBuildResonance, getResonanceLevel, RESONANCE_SYSTEMS } from "./buildResonance.js";
 
 describe("getResonanceLevel", () => {
   it("0〜2点は共鳴なし", () => {
@@ -77,5 +77,44 @@ describe("collectBuildResonance", () => {
     const player = { skills: ["poisonblade"] };
     const result = collectBuildResonance({ player, equip: {} });
     expect(result.poison.score).toBe(1);
+  });
+});
+
+describe("guard(防御・棘)系統", () => {
+  it("RESONANCE_SYSTEMSにguardが含まれる", () => {
+    expect(RESONANCE_SYSTEMS).toContain("guard");
+  });
+
+  it("装備アフィックス+固有能力+スキル+レリック+出自+執着の6点で共鳴IIに到達する", () => {
+    const player = { buildObsession: "guard", skills: ["ironguard"], relics: ["heart"], origin: "thorn" };
+    const equip = { weapon: { stats: { thorns: 20 }, ability: "ironthorn" } };
+    const result = collectBuildResonance({ player, equip });
+    expect(result.guard.score).toBe(6);
+    expect(result.guard.level).toBe(2);
+  });
+
+  it("3点ちょうどで共鳴Iになる(装備アフィックス+固有能力+執着)", () => {
+    const player = { buildObsession: "guard" };
+    const equip = { weapon: { stats: { thorns: 20 }, ability: "ironthorn" } };
+    const result = collectBuildResonance({ player, equip });
+    expect(result.guard.score).toBe(3);
+    expect(result.guard.level).toBe(1);
+  });
+
+  it("古いplayer/equip状態でもguardスコアはクラッシュせず0点になる", () => {
+    expect(() => collectBuildResonance()).not.toThrow();
+    expect(() => collectBuildResonance({})).not.toThrow();
+    const result = collectBuildResonance({});
+    expect(result.guard.score).toBe(0);
+    expect(result.guard.level).toBe(0);
+  });
+
+  it("guard追加後も他系統(poison)のスコア計算は変わらない", () => {
+    const player = { buildObsession: "poison", skills: ["poisonblade"], relics: ["venom"], origin: "venom" };
+    const equip = { weapon: { stats: { poisonPower: 20 }, ability: "scythe" } };
+    const result = collectBuildResonance({ player, equip });
+    expect(result.poison.score).toBe(6);
+    expect(result.poison.level).toBe(2);
+    expect(result.guard.score).toBe(0);
   });
 });

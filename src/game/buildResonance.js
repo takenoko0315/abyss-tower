@@ -2,7 +2,7 @@
 // ダメージ計算そのものへは関与しない(スコア/段階の算出だけを行う)。
 import { ABILITY_TAGS, OBSESSION_AFFIX_BIAS, ORIGIN_OBSESSION, RELIC_TAGS, SKILL_TAGS } from "./data.js";
 
-export const RESONANCE_SYSTEMS = ["poison", "burn", "bleed", "multi"];
+export const RESONANCE_SYSTEMS = ["poison", "burn", "bleed", "multi", "guard"];
 
 export const RESONANCE_LEVEL_1_THRESHOLD = 3;
 export const RESONANCE_LEVEL_2_THRESHOLD = 6;
