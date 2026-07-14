@@ -3,8 +3,9 @@ import { COMBAT_TONES } from "./combatTheme.js";
 // 攻撃/防御/スキル/回復の全ボタンで共有する見た目。
 // 全ボタン共通の濃いダークトーン背景 + カテゴリ色の左アクセント線(全面塗りはしない)。
 // 技名より予想値(ダメージ・被ダメージ・残り回数)を大きく見せ、
-// 「中断可能(金枠・発光・斧バッジ)」と「戦術的に不適切(淡い破線枠のみ・暗くしない)」と
-// 「disabled(背景・文字色を落として非活性化)」の3状態を別々の見た目で区別する。
+// 「中断可能(金枠・発光・斧バッジ)」と「disabled(背景・文字色を落として非活性化)」を
+// 別々の見た目で区別する。ineffective(戦術的に不適切)は判定自体は維持するが、
+// 使用可能ボタンとの見た目差(破線枠)は廃止し通常の実線枠にする。
 export default function CombatActionButton({
   testId, onClick, disabled = false, accent = COMBAT_TONES.neutral.strong,
   label, primaryValue, primaryTestId, secondaryCaption, secondaryTone,
@@ -24,18 +25,14 @@ export default function CombatActionButton({
     borderLeft: `4px solid ${COMBAT_TONES.chance.border}`,
     animation: "abyss-interrupt-pop .3s ease-out, abyss-interrupt-glow 1.1s ease-in-out .3s infinite",
   } : {};
-  // 「戦術的に不適切」は暗く沈めず、淡い破線枠だけで示す(disabledの塗りつぶし変化とは別の見た目にする)
-  const ineffectiveStyle = !disabled && !interrupt && ineffective ? {
-    borderTop: `1px dashed ${COMBAT_TONES.neutral.strong}`, borderRight: `1px dashed ${COMBAT_TONES.neutral.strong}`, borderBottom: `1px dashed ${COMBAT_TONES.neutral.strong}`,
-  } : {};
-
   return (
     <button
       data-testid={testId}
+      data-ineffective={ineffective ? "true" : undefined}
       onClick={onClick}
       disabled={disabled}
-      className={interrupt ? "abyss-animated" : undefined}
-      style={{ ...base, ...ineffectiveStyle, ...interruptStyle }}
+      className={interrupt ? "abyss-tap abyss-animated" : "abyss-tap"}
+      style={{ ...base, ...interruptStyle }}
     >
       {interrupt && (
         <span

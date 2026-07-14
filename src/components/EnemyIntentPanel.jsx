@@ -16,7 +16,7 @@ export default function EnemyIntentPanel({
           <span style={{ fontSize: 11, fontWeight: 700, opacity: .85 }}>処刑</span>
           <span style={{ fontSize: 26, fontWeight: 900 }}>{dmg ?? "?"}</span>
         </div>
-        <div data-testid="execution-threshold" style={{ fontSize: 10, fontWeight: 700, color: COMBAT_TONES.danger.strong, marginTop: 1 }}>1行動で{threshold}以上なら中断</div>
+        <div data-testid="execution-threshold" style={{ fontSize: 10, fontWeight: 700, color: "#a8a29e", marginTop: 1 }}>1行動で<span style={{ color: COMBAT_TONES.danger.strong }}>{threshold}以上</span>なら中断</div>
       </div>
     );
   }

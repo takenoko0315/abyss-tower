@@ -3568,6 +3568,13 @@ export default function HackRoguelike() {
         @media (prefers-reduced-motion: reduce) {
           .abyss-animated { animation: none !important; }
         }
+        /* モバイルのタップ感: 押下中だけわずかに縮小(常時アニメーションではない・disabledには適用しない) */
+        .abyss-tap { transition: transform .12s ease; }
+        .abyss-tap:active:not(:disabled) { transform: scale(.96); }
+        @media (prefers-reduced-motion: reduce) {
+          .abyss-tap { transition: none; }
+          .abyss-tap:active:not(:disabled) { transform: none; }
+        }
         .abyss-ec-grid { display: flex; flex-direction: column; align-items: center; gap: 10px; }
         .abyss-ec-visual { width: 72px; height: 72px; font-size: 40px; }
         .abyss-ec-info { width: 100%; text-align: center; }
